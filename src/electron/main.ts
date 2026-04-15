@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked } from 'marked';
@@ -13,6 +13,8 @@ let mainWindow: BrowserWindow | null = null;
 let contentDir = '';
 const OUTPUT_API_URL = process.env.OUTPUT_API_URL ?? 'http://localhost:3001';
 const MEM0_API_URL = process.env.MEM0_API_URL ?? 'http://localhost:8888';
+const UNASSIGNED_PROJECT = 'unassigned';
+const DEFAULT_MEM0_USER_ID = 'open-pouch';
 
 interface OutputErrorResponse {
   message?: string;
@@ -28,6 +30,26 @@ interface OutputResultResponse {
   };
   error?: string | null;
   status?: string;
+}
+
+function resolveProjectName( project?: string ) {
+  return project?.trim() || UNASSIGNED_PROJECT;
+}
+
+function projectUserId( project?: string ) {
+  const resolvedProject = resolveProjectName( project );
+  if ( resolvedProject === UNASSIGNED_PROJECT || resolvedProject === 'default' ) {
+    return DEFAULT_MEM0_USER_ID;
+  }
+
+  return `project:${resolvedProject}`;
+}
+
+function isPathInsideContentDir( filePath: string, dir: string ): boolean {
+  const resolved = path.resolve( filePath );
+  const base = path.resolve( dir );
+  const relative = path.relative( base, resolved );
+  return relative !== '' && !relative.startsWith( '..' ) && !path.isAbsolute( relative );
 }
 
 async function apiRequest<T>( pathname: string, init?: RequestInit ): Promise<T> {
@@ -161,6 +183,7 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
   const workflowId = await startWorkflowRun( payload.url );
   const result = await waitForWorkflowResult( workflowId );
   const output = result.output;
+  const targetProject = resolveProjectName( payload.project );
 
   if ( !output?.markdown || !output.title || !output.url ) {
     throw new Error( result.error ?? 'Workflow completed without markdown output.' );
@@ -170,26 +193,26 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
   const filePath = path.join( contentDir, fileName );
   await writeFile( filePath, output.markdown, 'utf8' );
 
-  if ( payload.project ) {
-    try {
-      await mem0Request( '/memories', {
-        method: 'POST',
-        body: JSON.stringify( {
-          messages: [
-            { role: 'user', content: `I ingested this article: "${output.title}" from ${output.url}. Here is a summary of the content:\n\n${output.markdown.slice( 0, 3000 )}` },
-            { role: 'assistant', content: `I've stored the article "${output.title}" in memory for the ${payload.project} project.` }
-          ],
-          user_id: `project:${payload.project}`,
-          metadata: {
-            source_type: 'article',
-            source_url: output.url,
-            tags: 'ingested'
-          }
-        } )
-      } );
-    } catch {
-      // Memory storage is best-effort; don't fail the ingest
-    }
+  try {
+    await mem0Request( '/memories', {
+      method: 'POST',
+      body: JSON.stringify( {
+        messages: [
+          { role: 'user', content: `I ingested this article: "${output.title}" from ${output.url}. Here is a summary of the content:\n\n${output.markdown.slice( 0, 3000 )}` },
+          { role: 'assistant', content: `I've stored the article "${output.title}" in memory for the ${targetProject} project.` }
+        ],
+        user_id: projectUserId( payload.project ),
+        metadata: {
+          source_type: 'article',
+          source_url: output.url,
+          file_path: filePath,
+          title: output.title,
+          tags: 'ingested'
+        }
+      } )
+    } );
+  } catch {
+    // Memory storage is best-effort; don't fail the ingest
   }
 
   return {
@@ -198,8 +221,26 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
     url: output.url,
     markdown: output.markdown,
     tokenCount: output.tokenCount ?? null,
-    filePath
+    filePath,
+    project: targetProject
   };
+} );
+
+ipcMain.handle( 'content:read-file', async ( _event, payload: { filePath: string } ) => {
+  if ( !contentDir ) {
+    throw new Error( 'Content directory is not ready yet.' );
+  }
+
+  const target = payload.filePath;
+  if ( !target || typeof target !== 'string' ) {
+    throw new Error( 'filePath is required.' );
+  }
+
+  if ( !isPathInsideContentDir( target, contentDir ) ) {
+    throw new Error( 'Access denied.' );
+  }
+
+  return readFile( path.resolve( target ), 'utf8' );
 } );
 
 ipcMain.handle( 'output:render-markdown', async ( _event, payload: { markdown: string } ) => {
@@ -241,8 +282,7 @@ ipcMain.handle( 'mem0:health', async () => {
 } );
 
 ipcMain.handle( 'mem0:list-memories', async ( _event, payload: { project: string } ) => {
-  const uid = `project:${payload.project}`;
-  return mem0Request( `/memories?user_id=${encodeURIComponent( uid )}` );
+  return mem0Request( `/memories?user_id=${encodeURIComponent( projectUserId( payload.project ) )}` );
 } );
 
 ipcMain.handle( 'mem0:search', async ( _event, payload: { project: string; query: string } ) => {
@@ -250,7 +290,7 @@ ipcMain.handle( 'mem0:search', async ( _event, payload: { project: string; query
     method: 'POST',
     body: JSON.stringify( {
       query: payload.query,
-      user_id: `project:${payload.project}`,
+      user_id: projectUserId( payload.project ),
       limit: 20
     } )
   } );
@@ -263,7 +303,7 @@ ipcMain.handle( 'mem0:add-memory', async ( _event, payload: { project: string; c
       messages: [
         { role: 'user', content: payload.content }
       ],
-      user_id: `project:${payload.project}`,
+      user_id: projectUserId( payload.project ),
       metadata: {
         source_type: 'manual',
         ...( payload.metadata ?? {} )
@@ -280,8 +320,7 @@ ipcMain.handle( 'mem0:delete-memory', async ( _event, payload: { memoryId: strin
 } );
 
 ipcMain.handle( 'mem0:delete-project', async ( _event, payload: { project: string } ) => {
-  const uid = `project:${payload.project}`;
-  await mem0Request( `/memories?user_id=${encodeURIComponent( uid )}`, {
+  await mem0Request( `/memories?user_id=${encodeURIComponent( projectUserId( payload.project ) )}`, {
     method: 'DELETE'
   } );
   return { deleted: true };

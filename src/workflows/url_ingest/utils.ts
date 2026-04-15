@@ -1,4 +1,4 @@
-import type { BlogContent } from '../blog_evaluator/types.js';
+import type { IngestedContent } from '../../shared/types/ingest.js';
 
 function slugify( value: string ): string {
   return value
@@ -8,17 +8,17 @@ function slugify( value: string ): string {
     .slice( 0, 64 ) || 'untitled';
 }
 
-export function createMarkdownDocument( blogContent: BlogContent ): string {
+export function createMarkdownDocument( ingestedContent: IngestedContent ): string {
   return [
-    `# ${blogContent.title}`,
+    `# ${ingestedContent.title}`,
     '',
-    `Source: ${blogContent.url}`,
+    `Source: ${ingestedContent.url}`,
     `Fetched At: ${new Date().toISOString()}`,
-    `Tokens: ${blogContent.tokenCount}`,
+    `Tokens: ${ingestedContent.tokenCount}`,
     '',
     '---',
     '',
-    blogContent.content.trim()
+    ingestedContent.content.trim()
   ].join( '\n' );
 }
 

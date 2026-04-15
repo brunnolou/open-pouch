@@ -3,12 +3,23 @@ const api = window.openPouchDesktop;
 // ── State ───────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'openpouch:projects';
-let projects = JSON.parse( localStorage.getItem( STORAGE_KEY ) || '[]' );
+const UNASSIGNED_PROJECT = 'unassigned';
+let projects = normalizeProjects( JSON.parse( localStorage.getItem( STORAGE_KEY ) || '[]' ) );
 let activeProject = null;
 let currentTab = 'memories';
 let searchTimeout = null;
 
+function normalizeProjects( list ) {
+  const items = Array.isArray( list )
+    ? list
+      .filter( Boolean )
+      .map( project => project === 'default' ? UNASSIGNED_PROJECT : project )
+    : [];
+  return Array.from( new Set( [ UNASSIGNED_PROJECT, ...items.filter( project => project !== UNASSIGNED_PROJECT ) ] ) );
+}
+
 function saveProjects() {
+  projects = normalizeProjects( projects );
   localStorage.setItem( STORAGE_KEY, JSON.stringify( projects ) );
 }
 
@@ -36,6 +47,13 @@ const memoryContentInput = $( '#memory-content-input' );
 const modalNewProject = $( '#modal-new-project' );
 const projectNameInput = $( '#project-name-input' );
 
+const modalMemorySource = $( '#modal-memory-source' );
+const memorySourceTitle = $( '#memory-source-title' );
+const memorySourcePath = $( '#memory-source-path' );
+const memorySourceBody = $( '#memory-source-body' );
+const memorySourceError = $( '#memory-source-error' );
+const btnCloseMemorySource = $( '#btn-close-memory-source' );
+
 const ingestForm = $( '#ingest-form' );
 const urlInput = $( '#url-input' );
 const btnIngest = $( '#btn-ingest' );
@@ -47,6 +65,22 @@ const ingestMarkdown = $( '#ingest-markdown' );
 const ingestProjectBadge = $( '#ingest-project-badge' );
 const ingestProjectName = $( '#ingest-project-name' );
 const ingestNoProject = $( '#ingest-no-project' );
+
+function formatIngestMeta( payload ) {
+  const parts = [ payload.url ];
+
+  if ( payload.tokenCount != null ) {
+    parts.push( `${payload.tokenCount} tokens` );
+  }
+
+  if ( payload.filePath ) {
+    parts.push( `saved to ${payload.filePath}` );
+  }
+
+  parts.push( `run ${payload.workflowId}` );
+
+  return parts.join( ' · ' );
+}
 
 // ── Tab switching ───────────────────────────────────────────────────────────
 
@@ -75,27 +109,30 @@ function renderProjects() {
         ? 'bg-cyan-400/15 text-cyan-300'
         : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
     }`;
+    const canDelete = name !== UNASSIGNED_PROJECT;
     btn.innerHTML = `
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="shrink-0 opacity-60"><path d="M2 5l5-3 5 3v6l-5 3-5-3z"/><path d="M7 2v12"/><path d="M2 5l5 3 5-3"/></svg>
       <span class="flex-1 truncate">${name}</span>
-      <svg class="delete-project hidden h-3.5 w-3.5 shrink-0 text-slate-500 transition hover:text-red-400 group-hover:block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+      ${canDelete ? '<svg class="delete-project hidden h-3.5 w-3.5 shrink-0 text-slate-500 transition hover:text-red-400 group-hover:block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>' : '<span class="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">unassigned</span>'}
     `;
 
     const deleteBtn = btn.querySelector( '.delete-project' );
-    deleteBtn.addEventListener( 'click', async ( e ) => {
-      e.stopPropagation();
-      if ( !confirm( `Delete project "${name}" and all its memories?` ) ) return;
-      try {
-        await api.deleteProject( name );
-      } catch { /* best effort */ }
-      projects = projects.filter( p => p !== name );
-      saveProjects();
-      if ( activeProject === name ) {
-        activeProject = projects[0] || null;
-      }
-      renderProjects();
-      loadMemories();
-    } );
+    if ( deleteBtn ) {
+      deleteBtn.addEventListener( 'click', async ( e ) => {
+        e.stopPropagation();
+        if ( !confirm( `Delete project "${name}" and all its memories?` ) ) return;
+        try {
+          await api.deleteProject( name );
+        } catch { /* best effort */ }
+        projects = normalizeProjects( projects.filter( p => p !== name ) );
+        saveProjects();
+        if ( activeProject === name ) {
+          activeProject = projects[0] || null;
+        }
+        renderProjects();
+        loadMemories();
+      } );
+    }
 
     btn.addEventListener( 'click', () => {
       activeProject = name;
@@ -118,6 +155,45 @@ function formatDate( dateStr ) {
   return d.toLocaleDateString( 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } );
 }
 
+function closeMemorySourceModal() {
+  modalMemorySource.classList.add( 'hidden' );
+  modalMemorySource.classList.remove( 'flex' );
+  memorySourceError.classList.add( 'hidden' );
+  memorySourceError.textContent = '';
+  memorySourceBody.innerHTML = '';
+}
+
+function openMemorySourceModal() {
+  modalMemorySource.classList.remove( 'hidden' );
+  modalMemorySource.classList.add( 'flex' );
+}
+
+async function showMemorySourceFromFile( mem ) {
+  const filePath = mem.metadata?.file_path;
+  if ( !filePath || typeof api.readFile !== 'function' ) return;
+
+  openMemorySourceModal();
+  memorySourceTitle.textContent = mem.metadata?.title || mem.memory;
+  memorySourcePath.textContent = filePath;
+  memorySourceBody.innerHTML = '<p class="text-slate-500">Loading…</p>';
+  memorySourceError.classList.add( 'hidden' );
+
+  try {
+    const markdown = await api.readFile( filePath );
+    if ( api.renderMarkdown ) {
+      memorySourceBody.innerHTML = await api.renderMarkdown( markdown );
+    } else {
+      memorySourceBody.textContent = markdown;
+    }
+  } catch ( err ) {
+    memorySourceError.textContent = err instanceof Error ? err.message : String( err );
+    memorySourceError.classList.remove( 'hidden' );
+    memorySourceBody.innerHTML = '';
+  }
+}
+
+btnCloseMemorySource.addEventListener( 'click', closeMemorySourceModal );
+
 function renderMemories( memories, relations ) {
   const cards = memoryListEl.querySelectorAll( '.memory-card' );
   cards.forEach( el => el.remove() );
@@ -130,14 +206,19 @@ function renderMemories( memories, relations ) {
 
   if ( hasMemories ) {
     memories.forEach( mem => {
+      const hasStoredFile = Boolean( mem.metadata?.file_path );
       const card = document.createElement( 'div' );
-      card.className = 'memory-card group flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] px-4 py-3 transition hover:border-white/10 hover:bg-white/[0.04]';
+      card.className = `memory-card group flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] px-4 py-3 transition hover:border-white/10 hover:bg-white/[0.04]${hasStoredFile ? ' cursor-pointer' : ''}`;
+      if ( hasStoredFile ) {
+        card.title = 'Click to open full document from disk';
+      }
       card.innerHTML = `
-        <div class="flex-1 min-w-0">
+        <div class="memory-card-main flex-1 min-w-0">
           <p class="text-sm text-slate-200 leading-relaxed">${mem.memory}</p>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
             ${mem.metadata?.source_type ? `<span class="inline-flex rounded-md bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-400">${mem.metadata.source_type}</span>` : ''}
             ${mem.metadata?.tags ? mem.metadata.tags.split( ',' ).map( t => `<span class="inline-flex rounded-md bg-cyan-400/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400/70">${t.trim()}</span>` ).join( '' ) : ''}
+            ${hasStoredFile ? '<span class="inline-flex rounded-md border border-cyan-400/20 bg-cyan-400/5 px-2 py-0.5 text-[10px] font-medium text-cyan-300/90">full document</span>' : ''}
             <span class="text-[10px] text-slate-600">${formatDate( mem.created_at )}</span>
           </div>
         </div>
@@ -146,7 +227,14 @@ function renderMemories( memories, relations ) {
         </button>
       `;
 
-      card.querySelector( '.delete-mem' ).addEventListener( 'click', async () => {
+      if ( hasStoredFile ) {
+        card.addEventListener( 'click', () => {
+          void showMemorySourceFromFile( mem );
+        } );
+      }
+
+      card.querySelector( '.delete-mem' ).addEventListener( 'click', async ( e ) => {
+        e.stopPropagation();
         try {
           await api.deleteMemory( mem.id );
           card.remove();
@@ -286,6 +374,10 @@ $( '#btn-cancel-project' ).addEventListener( 'click', () => {
 $( '#btn-create-project' ).addEventListener( 'click', () => {
   const name = projectNameInput.value.trim().toLowerCase().replace( /[^a-z0-9_-]/g, '-' );
   if ( !name ) return;
+  if ( name === 'default' ) {
+    alert( `"default" is now "${UNASSIGNED_PROJECT}". Use that built-in project instead.` );
+    return;
+  }
   if ( projects.includes( name ) ) {
     alert( 'Project already exists.' );
     return;
@@ -330,13 +422,15 @@ ingestForm.addEventListener( 'submit', async ( e ) => {
   }
 
   btnIngest.disabled = true;
-  ingestStatus.textContent = 'Running workflow...';
+  btnIngest.textContent = 'Ingesting...';
+  ingestStatus.textContent = `Running generic ingest for "${activeProject || UNASSIGNED_PROJECT}"...`;
   ingestResult.classList.add( 'hidden' );
+  ingestResult.classList.remove( 'flex' );
 
   try {
     const payload = await api.ingestUrl( url, activeProject || undefined );
     ingestTitle.textContent = payload.title;
-    ingestMeta.textContent = `${payload.url} · ${payload.tokenCount ?? '?'} tokens · run ${payload.workflowId}`;
+    ingestMeta.textContent = formatIngestMeta( payload );
 
     if ( api.renderMarkdown ) {
       ingestMarkdown.innerHTML = await api.renderMarkdown( payload.markdown );
@@ -346,17 +440,20 @@ ingestForm.addEventListener( 'submit', async ( e ) => {
 
     ingestResult.classList.remove( 'hidden' );
     ingestResult.classList.add( 'flex' );
-    ingestStatus.textContent = activeProject
-      ? `Saved & stored to memory in "${activeProject}".`
-      : 'Saved locally (no project selected for memory).';
+    ingestStatus.textContent = `Ingest complete. Markdown saved locally and memory added to "${payload.project || UNASSIGNED_PROJECT}".`;
 
-    if ( activeProject ) {
-      setTimeout( loadMemories, 1000 );
+    if ( !projects.includes( payload.project ) ) {
+      projects.push( payload.project );
+      saveProjects();
+      renderProjects();
     }
+
+    setTimeout( loadMemories, 1000 );
   } catch ( err ) {
     ingestStatus.textContent = err.message;
   } finally {
     btnIngest.disabled = false;
+    btnIngest.textContent = 'Ingest URL';
   }
 } );
 
@@ -386,6 +483,7 @@ document.addEventListener( 'keydown', ( e ) => {
     modalAddMemory.classList.remove( 'flex' );
     modalNewProject.classList.add( 'hidden' );
     modalNewProject.classList.remove( 'flex' );
+    closeMemorySourceModal();
   }
 
   if ( ( e.metaKey || e.ctrlKey ) && e.key === 'k' ) {

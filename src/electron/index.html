@@ -38,7 +38,7 @@
           <h2 id="current-project-name" class="text-base font-semibold text-white">Select a project</h2>
           <div class="ml-auto flex items-center gap-2">
             <button id="btn-tab-memories" class="tab-btn tab-active rounded-lg px-3 py-1.5 text-xs font-medium">Memories</button>
-            <button id="btn-tab-ingest" class="tab-btn rounded-lg px-3 py-1.5 text-xs font-medium">Ingest</button>
+            <button id="btn-tab-ingest" class="tab-btn rounded-lg px-3 py-1.5 text-xs font-medium">Ingest URL</button>
           </div>
         </header>
 
@@ -76,16 +76,16 @@
         <div id="tab-ingest" class="hidden flex-1 overflow-y-auto">
           <div class="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
             <div>
-              <p class="text-xs uppercase tracking-[0.2em] text-cyan-300/80">Ingest URL</p>
-              <h2 class="mt-1 text-xl font-semibold text-white">Fetch content from a URL</h2>
-              <p class="mt-2 text-sm text-slate-400">Runs an Output.ai workflow to extract markdown, saves locally, and stores to memory.</p>
+              <p class="text-xs uppercase tracking-[0.2em] text-cyan-300/80">Generic Ingest</p>
+              <h2 class="mt-1 text-xl font-semibold text-white">Capture content from any URL</h2>
+              <p class="mt-2 text-sm text-slate-400">Runs the generic ingest workflow, extracts markdown, saves it locally, and optionally adds a memory to the selected project.</p>
               <div id="ingest-project-badge" class="mt-3 hidden items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="shrink-0 text-cyan-400/70"><path d="M2 5l5-3 5 3v6l-5 3-5-3z"/><path d="M7 2v12"/><path d="M2 5l5 3 5-3"/></svg>
-                <span class="text-xs text-cyan-300">Storing to project: <strong id="ingest-project-name"></strong></span>
+                <span class="text-xs text-cyan-300">Project memory target: <strong id="ingest-project-name"></strong></span>
               </div>
               <div id="ingest-no-project" class="mt-3 hidden items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="shrink-0 text-amber-400/70"><circle cx="8" cy="8" r="6"/><line x1="8" y1="5" x2="8" y2="9" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor"/></svg>
-                <span class="text-xs text-amber-300/80">No project selected — content will only be saved locally, not to memory.</span>
+                <span class="text-xs text-amber-300/80">No project selected. This run will save markdown locally only.</span>
               </div>
             </div>
 
@@ -93,12 +93,12 @@
               <textarea
                 id="url-input"
                 class="min-h-28 resize-none rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/10"
-                placeholder="https://example.com/article"
+                placeholder="https://example.com/article-or-page"
               ></textarea>
               <div class="flex items-center justify-between gap-4">
-                <p id="ingest-status" class="text-sm text-slate-400">Ready.</p>
+                <p id="ingest-status" class="text-sm text-slate-400">Paste a URL to ingest its content.</p>
                 <button type="submit" id="btn-ingest" class="inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60">
-                  Fetch &amp; Store
+                  Ingest URL
                 </button>
               </div>
             </form>
@@ -107,7 +107,7 @@
             <section id="ingest-result" class="hidden flex-col gap-3">
               <div class="flex items-center justify-between">
                 <div>
-                  <p class="text-xs uppercase tracking-[0.2em] text-cyan-300/80">Result</p>
+                  <p class="text-xs uppercase tracking-[0.2em] text-cyan-300/80">Ingest Result</p>
                   <h3 id="ingest-title" class="mt-1 text-lg font-semibold text-white"></h3>
                 </div>
               </div>
@@ -130,6 +130,22 @@
           <button id="btn-cancel-memory" class="rounded-lg px-4 py-2 text-sm text-slate-400 transition hover:text-white">Cancel</button>
           <button id="btn-save-memory" class="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-60">Save Memory</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ── Memory source file (full document) ─────────────── -->
+    <div id="modal-memory-source" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div class="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
+        <div class="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-6 py-4">
+          <div class="min-w-0">
+            <p class="text-xs uppercase tracking-[0.2em] text-cyan-300/80">Stored document</p>
+            <h3 id="memory-source-title" class="mt-1 truncate text-lg font-semibold text-white"></h3>
+            <p id="memory-source-path" class="mt-1 truncate text-xs text-slate-500"></p>
+          </div>
+          <button id="btn-close-memory-source" type="button" class="shrink-0 rounded-lg px-3 py-1.5 text-sm text-slate-400 transition hover:bg-white/10 hover:text-white">Close</button>
+        </div>
+        <article id="memory-source-body" class="markdown-body min-h-0 flex-1 overflow-auto p-6 text-sm leading-7 text-slate-200"></article>
+        <p id="memory-source-error" class="hidden shrink-0 px-6 py-3 text-sm text-red-400"></p>
       </div>
     </div>
 

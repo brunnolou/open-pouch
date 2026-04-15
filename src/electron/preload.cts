@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld( 'openPouchDesktop', {
   getHealth: () => ipcRenderer.invoke( 'output:health' ),
   ingestUrl: ( url: string, project?: string ) => ipcRenderer.invoke( 'output:ingest-url', { url, project } ),
   renderMarkdown: ( markdown: string ) => ipcRenderer.invoke( 'output:render-markdown', { markdown } ),
+  readFile: ( filePath: string ) => ipcRenderer.invoke( 'content:read-file', { filePath } ),
 
   mem0Health: () => ipcRenderer.invoke( 'mem0:health' ),
   listMemories: ( project: string ) => ipcRenderer.invoke( 'mem0:list-memories', { project } ),

@@ -1,16 +1,16 @@
 import { step, z } from '@outputai/core';
-import { fetchBlogContent } from '../../clients/jina.js';
-import { blogContentSchema } from './types.js';
+import { fetchUrlContent } from '../../clients/jina.js';
+import { ingestedContentSchema } from '../types/ingest.js';
 
 export const fetchContent = step( {
-  name: 'fetch_blog_content',
-  description: 'Fetch blog content from URL using Jina Reader API',
+  name: 'fetch_url_content',
+  description: 'Fetch content from a URL using Jina Reader API',
   inputSchema: z.object( {
     url: z.string().url()
   } ),
-  outputSchema: blogContentSchema,
+  outputSchema: ingestedContentSchema,
   fn: async ( { url } ) => {
-    const response = await fetchBlogContent( url );
+    const response = await fetchUrlContent( url );
     return {
       title: response.data.title,
       url: response.data.url,

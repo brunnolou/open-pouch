@@ -1,6 +1,15 @@
-# open-pouch
+# Open Pouch 🦘
 
-AI Agents &amp; Workflows built with Output.ai for open-pouch
+Capture and organize context memory for AI agents
+
+#### What the app actually does:
+
+- Ingest, remember, and retrieve context for AI agents
+- Ingests web URLs into clean markdown
+- Stores content as searchable memories (via Mem0) organized by project
+- Lets you manually add notes/facts as memories too
+- Provides search and a knowledge graph across memories
+
 
 ## Prerequisites
 
@@ -15,14 +24,11 @@ src/
 ├── shared/                    # Shared code across workflows
 │   └── utils/                 # Utility functions (e.g., string.ts)
 └── workflows/                 # Workflow definitions
-    └── blog_evaluator/        # Example workflow
+    ├── ingest/                # Shared ingest steps and types
+    └── url_ingest/            # Main URL ingest workflow
         ├── workflow.ts        # Main workflow
-        ├── steps.ts           # Workflow steps
-        ├── evaluators.ts      # Quality evaluators
-        ├── types.ts           # Shared types and schemas
-        ├── utils.ts           # Local utilities
-        ├── prompts/           # LLM prompts
-        └── scenarios/         # Test scenarios
+        ├── types.ts           # Workflow schemas
+        └── utils.ts           # Markdown output helpers
 ```
 
 ### Clients Directory
@@ -86,7 +92,7 @@ This starts:
 In a new terminal:
 
 ```bash
-npx output workflow run blog_evaluator paulgraham_hwh
+npx output workflow run url_ingest --input '{"url":"https://example.com"}'
 ```
 
 ### 5. Stop Services

@@ -17,7 +17,7 @@ const jinaClient = httpClient( {
   timeout: 30000
 } );
 
-export async function fetchBlogContent( url: string ): Promise<JinaReaderResponse> {
+export async function fetchUrlContent( url: string ): Promise<JinaReaderResponse> {
   const response = await jinaClient.post( '', {
     json: { url },
     headers: {
