@@ -106,14 +106,14 @@ function renderProjects() {
     const btn = document.createElement( 'button' );
     btn.className = `project-item group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
       name === activeProject
-        ? 'bg-cyan-400/15 text-cyan-300'
-        : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+        ? 'bg-primary/15 text-primary'
+        : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
     }`;
     const canDelete = name !== UNASSIGNED_PROJECT;
     btn.innerHTML = `
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="shrink-0 opacity-60"><path d="M2 5l5-3 5 3v6l-5 3-5-3z"/><path d="M7 2v12"/><path d="M2 5l5 3 5-3"/></svg>
       <span class="flex-1 truncate">${name}</span>
-      ${canDelete ? '<svg class="delete-project hidden h-3.5 w-3.5 shrink-0 text-slate-500 transition hover:text-red-400 group-hover:block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>' : '<span class="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">unassigned</span>'}
+      ${canDelete ? '<svg class="delete-project hidden h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition hover:text-destructive group-hover:block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>' : '<span class="rounded-md bg-muted/30 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">unassigned</span>'}
     `;
 
     const deleteBtn = btn.querySelector( '.delete-project' );
@@ -175,7 +175,7 @@ async function showMemorySourceFromFile( mem ) {
   openMemorySourceModal();
   memorySourceTitle.textContent = mem.metadata?.title || mem.memory;
   memorySourcePath.textContent = filePath;
-  memorySourceBody.innerHTML = '<p class="text-slate-500">Loading…</p>';
+  memorySourceBody.innerHTML = '<p class="text-muted-foreground">Loading…</p>';
   memorySourceError.classList.add( 'hidden' );
 
   try {
@@ -208,21 +208,21 @@ function renderMemories( memories, relations ) {
     memories.forEach( mem => {
       const hasStoredFile = Boolean( mem.metadata?.file_path );
       const card = document.createElement( 'div' );
-      card.className = `memory-card group flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] px-4 py-3 transition hover:border-white/10 hover:bg-white/[0.04]${hasStoredFile ? ' cursor-pointer' : ''}`;
+      card.className = `memory-card group flex items-start gap-3 rounded-xl border border-border/50 bg-card/30 px-4 py-3 transition hover:border-border hover:bg-card/60${hasStoredFile ? ' cursor-pointer' : ''}`;
       if ( hasStoredFile ) {
         card.title = 'Click to open full document from disk';
       }
       card.innerHTML = `
         <div class="memory-card-main flex-1 min-w-0">
-          <p class="text-sm text-slate-200 leading-relaxed">${mem.memory}</p>
+          <p class="text-sm text-foreground leading-relaxed">${mem.memory}</p>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
-            ${mem.metadata?.source_type ? `<span class="inline-flex rounded-md bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-400">${mem.metadata.source_type}</span>` : ''}
-            ${mem.metadata?.tags ? mem.metadata.tags.split( ',' ).map( t => `<span class="inline-flex rounded-md bg-cyan-400/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400/70">${t.trim()}</span>` ).join( '' ) : ''}
-            ${hasStoredFile ? '<span class="inline-flex rounded-md border border-cyan-400/20 bg-cyan-400/5 px-2 py-0.5 text-[10px] font-medium text-cyan-300/90">full document</span>' : ''}
-            <span class="text-[10px] text-slate-600">${formatDate( mem.created_at )}</span>
+            ${mem.metadata?.source_type ? `<span class="inline-flex rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">${mem.metadata.source_type}</span>` : ''}
+            ${mem.metadata?.tags ? mem.metadata.tags.split( ',' ).map( t => `<span class="inline-flex rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary/70">${t.trim()}</span>` ).join( '' ) : ''}
+            ${hasStoredFile ? '<span class="inline-flex rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] font-medium text-primary/90">full document</span>' : ''}
+            <span class="text-[10px] text-muted-foreground/50">${formatDate( mem.created_at )}</span>
           </div>
         </div>
-        <button class="delete-mem hidden shrink-0 rounded-md p-1 text-slate-600 transition hover:bg-red-500/10 hover:text-red-400 group-hover:block" title="Delete">
+        <button class="delete-mem hidden shrink-0 rounded-md p-1 text-muted-foreground/50 transition hover:bg-destructive/10 hover:text-destructive group-hover:block" title="Delete">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
         </button>
       `;
@@ -252,14 +252,14 @@ function renderMemories( memories, relations ) {
     const section = document.createElement( 'div' );
     section.className = 'relations-section mt-6';
     section.innerHTML = `
-      <p class="mb-3 text-xs font-medium uppercase tracking-widest text-slate-500">Knowledge Graph</p>
+      <p class="mb-3 text-xs font-medium uppercase tracking-widest text-muted-foreground">Knowledge Graph</p>
       <div class="flex flex-wrap gap-2">
         ${relations.map( r => `
-          <div class="inline-flex items-center gap-1 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-1.5 text-xs">
-            <span class="font-medium text-cyan-300/80">${r.source}</span>
-            <span class="text-slate-600">&rarr;</span>
-            <span class="text-slate-500">${r.relationship}</span>
-            <span class="text-slate-600">&rarr;</span>
+          <div class="inline-flex items-center gap-1 rounded-lg border border-border/50 bg-card/30 px-3 py-1.5 text-xs">
+            <span class="font-medium text-primary/80">${r.source}</span>
+            <span class="text-muted-foreground/50">&rarr;</span>
+            <span class="text-muted-foreground">${r.relationship}</span>
+            <span class="text-muted-foreground/50">&rarr;</span>
             <span class="font-medium text-purple-300/80">${r.target}</span>
           </div>
         `).join( '' )}

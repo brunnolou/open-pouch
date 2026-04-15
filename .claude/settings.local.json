@@ -3,7 +3,8 @@
     "allow": [
       "Bash(gh api:*)",
       "Skill(outputai:output-services-check)",
-      "Skill(outputai:output-workflow-run)"
+      "Skill(outputai:output-workflow-run)",
+      "Bash(npm install:*)"
     ]
   }
 }
