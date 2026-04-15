@@ -23,7 +23,9 @@ export async function fetchUrlContent( url: string ): Promise<JinaReaderResponse
     headers: {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
-      'X-Return-Format': 'markdown'
+      'X-Return-Format': 'markdown',
+      'X-Remove-Selector': 'nav, footer, header, .sidebar, .menu, .navigation, #ads',
+      'X-Target-Selector': 'article, main, .content, .post, #content, .main-content'
     }
   } );
   return response.json() as Promise<JinaReaderResponse>;

@@ -1,3 +1,5 @@
+import { Crepe } from '@milkdown/crepe';
+
 const api = window.openPouchDesktop;
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -10,6 +12,8 @@ let currentTab = 'memories';
 let searchTimeout = null;
 let agentStreaming = false;
 let chatMessages = [];
+let docEditor = null;
+let activeDocument = null;
 
 function normalizeProjects( list ) {
   const items = Array.isArray( list )
@@ -55,6 +59,8 @@ const docViewerTitle = $( '#doc-viewer-title' );
 const docViewerPath = $( '#doc-viewer-path' );
 const docViewerBody = $( '#doc-viewer-body' );
 const docViewerError = $( '#doc-viewer-error' );
+const docSaveStatus = $( '#doc-save-status' );
+const btnSaveDoc = $( '#btn-save-doc' );
 const btnCloseDoc = $( '#btn-close-doc' );
 
 const ingestForm = $( '#ingest-form' );
@@ -97,11 +103,16 @@ function formatIngestMeta( payload ) {
 // ── Tab switching ───────────────────────────────────────────────────────────
 
 function switchTab( tab ) {
+  if ( !docViewer.classList.contains( 'hidden' ) ) {
+    const didClose = closeDocViewer();
+    if ( !didClose ) {
+      return;
+    }
+  }
+
   currentTab = tab;
   tabMemories.classList.toggle( 'hidden', tab !== 'memories' );
   tabIngest.classList.toggle( 'hidden', tab !== 'ingest' );
-  docViewer.classList.add( 'hidden' );
-  docViewer.classList.remove( 'flex' );
   btnTabMemories.classList.toggle( 'tab-active', tab === 'memories' );
   btnTabIngest.classList.toggle( 'tab-active', tab === 'ingest' );
 }
@@ -112,11 +123,19 @@ btnTabIngest.addEventListener( 'click', () => switchTab( 'ingest' ) );
 // ── Inline document viewer ──────────────────────────────────────────────────
 
 function closeDocViewer() {
+  if ( activeDocument?.isDirty && !confirm( 'Discard unsaved changes?' ) ) {
+    return false;
+  }
+
   docViewer.classList.add( 'hidden' );
   docViewer.classList.remove( 'flex' );
   docViewerError.classList.add( 'hidden' );
-  docViewerBody.innerHTML = '';
   tabMemories.classList.remove( 'hidden' );
+  teardownDocEditor();
+  activeDocument = null;
+  docViewerBody.innerHTML = '';
+  setDocStatus( 'Saved' );
+  return true;
 }
 
 function openDocViewer() {
@@ -126,31 +145,163 @@ function openDocViewer() {
   docViewer.classList.add( 'flex' );
 }
 
+function setDocStatus( message, tone = 'muted' ) {
+  docSaveStatus.textContent = message;
+  docSaveStatus.className = 'text-[11px]';
+
+  if ( tone === 'error' ) {
+    docSaveStatus.classList.add( 'text-destructive' );
+    return;
+  }
+
+  if ( tone === 'dirty' ) {
+    docSaveStatus.classList.add( 'text-primary' );
+    return;
+  }
+
+  docSaveStatus.classList.add( 'text-muted-foreground' );
+}
+
+function syncDocActions() {
+  const canSave = Boolean( activeDocument && docEditor && activeDocument.isDirty && !activeDocument.isSaving && typeof api.writeFile === 'function' );
+  btnSaveDoc.disabled = !canSave;
+
+  if ( activeDocument?.isSaving ) {
+    btnSaveDoc.textContent = 'Saving...';
+    setDocStatus( 'Saving changes…' );
+    return;
+  }
+
+  btnSaveDoc.textContent = 'Save';
+
+  if ( activeDocument?.isDirty ) {
+    setDocStatus( 'Unsaved changes', 'dirty' );
+    return;
+  }
+
+  setDocStatus( 'Saved' );
+}
+
+async function teardownDocEditor() {
+  if ( !docEditor ) return;
+
+  const editor = docEditor;
+  docEditor = null;
+
+  try {
+    await editor.destroy();
+  } catch {
+    // Best effort during teardown.
+  }
+}
+
+async function mountDocEditor( markdown ) {
+  await teardownDocEditor();
+  docViewerBody.innerHTML = '';
+
+  const editor = new Crepe( {
+    root: docViewerBody,
+    defaultValue: markdown
+  } );
+
+  editor.on( listener => {
+    listener.markdownUpdated( ( _ctx, nextMarkdown ) => {
+      if ( !activeDocument || docEditor !== editor ) return;
+
+      activeDocument.currentMarkdown = nextMarkdown;
+      activeDocument.isDirty = nextMarkdown !== activeDocument.initialMarkdown;
+      syncDocActions();
+    } );
+  } );
+
+  await editor.create();
+
+  docEditor = editor;
+
+  const normalizedMarkdown = editor.getMarkdown();
+  if ( activeDocument ) {
+    activeDocument.initialMarkdown = normalizedMarkdown;
+    activeDocument.currentMarkdown = normalizedMarkdown;
+    activeDocument.isDirty = false;
+    activeDocument.isSaving = false;
+  }
+
+  syncDocActions();
+}
+
+async function saveActiveDocument() {
+  if ( !activeDocument || !docEditor || !activeDocument.isDirty || typeof api.writeFile !== 'function' ) {
+    return;
+  }
+
+  const markdown = docEditor.getMarkdown();
+  activeDocument.isSaving = true;
+  syncDocActions();
+  docViewerError.classList.add( 'hidden' );
+
+  try {
+    await api.writeFile( activeDocument.filePath, markdown );
+    activeDocument.initialMarkdown = markdown;
+    activeDocument.currentMarkdown = markdown;
+    activeDocument.isDirty = false;
+    setDocStatus( 'Saved just now' );
+  } catch ( err ) {
+    docViewerError.textContent = err instanceof Error ? err.message : String( err );
+    docViewerError.classList.remove( 'hidden' );
+    setDocStatus( 'Save failed', 'error' );
+  } finally {
+    activeDocument.isSaving = false;
+    syncDocActions();
+  }
+}
+
 async function showDocumentFromFile( mem ) {
   const filePath = mem.metadata?.file_path;
   if ( !filePath || typeof api.readFile !== 'function' ) return;
 
+  if ( activeDocument?.isDirty && activeDocument.filePath !== filePath && !confirm( 'Discard unsaved changes and open another document?' ) ) {
+    return;
+  }
+
   openDocViewer();
   docViewerTitle.textContent = mem.metadata?.title || mem.memory;
   docViewerPath.textContent = filePath;
-  docViewerBody.innerHTML = '<p class="text-muted-foreground">Loading…</p>';
+  docViewerBody.innerHTML = '<div class="flex h-full items-center justify-center text-sm text-muted-foreground">Loading editor…</div>';
   docViewerError.classList.add( 'hidden' );
+  activeDocument = {
+    filePath,
+    title: mem.metadata?.title || mem.memory,
+    initialMarkdown: '',
+    currentMarkdown: '',
+    isDirty: false,
+    isSaving: false
+  };
+  setDocStatus( 'Loading…' );
+  syncDocActions();
 
   try {
     const markdown = await api.readFile( filePath );
-    if ( api.renderMarkdown ) {
-      docViewerBody.innerHTML = await api.renderMarkdown( markdown );
-    } else {
-      docViewerBody.textContent = markdown;
-    }
+    await mountDocEditor( markdown );
   } catch ( err ) {
     docViewerError.textContent = err instanceof Error ? err.message : String( err );
     docViewerError.classList.remove( 'hidden' );
     docViewerBody.innerHTML = '';
+    setDocStatus( 'Open failed', 'error' );
   }
 }
 
-btnCloseDoc.addEventListener( 'click', closeDocViewer );
+btnCloseDoc.addEventListener( 'click', () => {
+  closeDocViewer();
+} );
+btnSaveDoc.addEventListener( 'click', () => {
+  void saveActiveDocument();
+} );
+document.addEventListener( 'keydown', ( e ) => {
+  if ( ( e.metaKey || e.ctrlKey ) && e.key.toLowerCase() === 's' && !docViewer.classList.contains( 'hidden' ) ) {
+    e.preventDefault();
+    void saveActiveDocument();
+  }
+} );
 
 // ── Project rendering ───────────────────────────────────────────────────────
 
@@ -506,7 +657,7 @@ function addChatMessage( role, content ) {
   } else {
     wrapper.innerHTML = `
       <div class="mr-8 rounded-xl border border-border/50 bg-card/40 px-4 py-2.5">
-        <p class="chat-text text-sm text-foreground leading-relaxed whitespace-pre-wrap">${content || ''}</p>
+        <div class="chat-text text-sm text-foreground leading-relaxed whitespace-pre-wrap">${content || ''}</div>
       </div>
     `;
   }
@@ -518,11 +669,33 @@ function addChatMessage( role, content ) {
   return id;
 }
 
+let assistantRawBuffer = '';
+
+function renderMarkdownToEl( el, md ) {
+  if ( api.parseMarkdown ) {
+    el.innerHTML = api.parseMarkdown( md );
+    el.classList.remove( 'whitespace-pre-wrap' );
+    el.classList.add( 'markdown-body' );
+  } else {
+    el.textContent = md;
+  }
+}
+
 function appendToLastAssistant( text ) {
   const lastMsg = chatMessagesEl.querySelector( '.chat-msg-assistant:last-of-type .chat-text' );
   if ( lastMsg ) {
-    lastMsg.textContent += text;
+    assistantRawBuffer += text;
+    renderMarkdownToEl( lastMsg, assistantRawBuffer );
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  }
+}
+
+function finalizeLastAssistant() {
+  for ( let i = chatMessages.length - 1; i >= 0; i-- ) {
+    if ( chatMessages[i].role === 'assistant' ) {
+      chatMessages[i].content = assistantRawBuffer;
+      break;
+    }
   }
 }
 
@@ -607,11 +780,13 @@ function handleAgentEvent( event ) {
     case 'message_update':
       if ( event.eventType === 'text_delta' && event.delta ) {
         if ( !currentAssistantMsgId ) {
+          assistantRawBuffer = '';
           currentAssistantMsgId = addChatMessage( 'assistant', '' );
         }
         appendToLastAssistant( event.delta );
       }
       if ( event.eventType === 'text_start' ) {
+        assistantRawBuffer = '';
         setAgentStatus( 'Writing…', 'bg-primary animate-pulse' );
       }
       break;
@@ -630,6 +805,7 @@ function handleAgentEvent( event ) {
       break;
 
     case 'message_end':
+      finalizeLastAssistant();
       currentAssistantMsgId = null;
       break;
 
@@ -643,11 +819,43 @@ function handleAgentEvent( event ) {
   }
 }
 
+async function clearChat() {
+  if ( agentStreaming ) {
+    await api.agentAbort();
+  }
+
+  chatMessagesEl.querySelectorAll( '.chat-message, .chat-tool-card' ).forEach( el => el.remove() );
+  chatEmptyEl.classList.remove( 'hidden' );
+  chatMessages = [];
+  currentAssistantMsgId = null;
+  agentStreaming = false;
+
+  setAgentStatus( 'Starting…', 'bg-amber-400 animate-pulse' );
+  btnChatSend.disabled = true;
+
+  const result = await api.agentClear();
+  if ( result.ok ) {
+    setAgentStatus( 'Ready', 'bg-emerald-400' );
+  } else {
+    setAgentStatus( 'Error', 'bg-destructive' );
+    addChatMessage( 'assistant', `Failed to start new session: ${result.error}` );
+  }
+
+  btnChatSend.disabled = false;
+  chatInput.focus();
+}
+
 async function sendChatMessage() {
   const text = chatInput.value.trim();
   if ( !text || agentStreaming ) return;
 
   chatInput.value = '';
+
+  if ( text === '/clear' ) {
+    await clearChat();
+    return;
+  }
+
   addChatMessage( 'user', text );
 
   const result = await api.agentPrompt( text );

@@ -80,11 +80,19 @@
               <h3 id="doc-viewer-title" class="mt-0.5 truncate text-sm font-semibold text-foreground"></h3>
               <p id="doc-viewer-path" class="truncate text-[11px] text-muted-foreground"></p>
             </div>
-            <button id="btn-close-doc" type="button" class="shrink-0 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
-            </button>
+            <div class="flex shrink-0 items-center gap-2">
+              <p id="doc-save-status" class="text-[11px] text-muted-foreground">Saved</p>
+              <button id="btn-save-doc" type="button" class="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50">
+                Save
+              </button>
+              <button id="btn-close-doc" type="button" class="shrink-0 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+              </button>
+            </div>
           </div>
-          <article id="doc-viewer-body" class="markdown-body min-h-0 flex-1 overflow-auto px-6 py-5 text-sm leading-7 text-foreground"></article>
+          <div class="doc-editor-shell min-h-0 flex-1 overflow-hidden px-6 py-5">
+            <div id="doc-viewer-body" class="doc-editor-host h-full overflow-auto rounded-2xl border border-border bg-card/50"></div>
+          </div>
           <p id="doc-viewer-error" class="hidden shrink-0 px-6 py-3 text-sm text-destructive"></p>
         </div>
 

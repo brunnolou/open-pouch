@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/noto-sans";
 @import "@fontsource-variable/geist";
+@import "@milkdown/crepe/theme/frame.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -258,6 +259,50 @@ body {
   overflow-x: auto;
 }
 
+/* ── Markdown editor ────────────────────────────────────────────────────── */
+
+.doc-editor-shell {
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--card) 82%, transparent), transparent 20%),
+    radial-gradient(circle at top right, oklch(0.795 0.184 86.047 / 0.06), transparent 28%);
+}
+
+.doc-editor-host {
+  min-height: 0;
+}
+
+.doc-editor-host .milkdown {
+  height: 100%;
+  --crepe-color-background: color-mix(in oklch, var(--background) 94%, var(--card));
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-surface: color-mix(in oklch, var(--card) 88%, var(--background));
+  --crepe-color-surface-low: color-mix(in oklch, var(--card) 76%, var(--background));
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-outline: color-mix(in oklch, var(--border) 90%, transparent);
+  --crepe-color-primary: var(--foreground);
+  --crepe-color-secondary: color-mix(in oklch, var(--muted) 72%, transparent);
+  --crepe-color-on-secondary: var(--foreground);
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--background);
+  --crepe-color-inline-code: var(--primary);
+  --crepe-color-error: var(--destructive);
+  --crepe-color-hover: color-mix(in oklch, var(--muted) 65%, transparent);
+  --crepe-color-selected: color-mix(in oklch, var(--muted) 90%, transparent);
+  --crepe-color-inline-area: color-mix(in oklch, var(--muted) 80%, transparent);
+  --crepe-font-default: var(--font-sans);
+  --crepe-font-title: var(--font-heading);
+}
+
+.doc-editor-host .milkdown .editor {
+  min-height: 100%;
+}
+
+.doc-editor-host .milkdown .ProseMirror {
+  min-height: 100%;
+  padding: 1.5rem 1.75rem 5rem;
+}
+
 .markdown-body pre code {
   border: 0;
   background: transparent;
@@ -297,6 +342,50 @@ body {
 
 #chat-messages {
   scroll-behavior: smooth;
+}
+
+/* Compact markdown inside chat bubbles */
+.chat-msg-assistant .markdown-body {
+  font-size: 0.875rem;
+  line-height: 1.625;
+}
+
+.chat-msg-assistant .markdown-body h1,
+.chat-msg-assistant .markdown-body h2,
+.chat-msg-assistant .markdown-body h3,
+.chat-msg-assistant .markdown-body h4 {
+  margin: 0.75rem 0 0.4rem;
+}
+
+.chat-msg-assistant .markdown-body h1 { font-size: 1.15rem; }
+.chat-msg-assistant .markdown-body h2 { font-size: 1.05rem; }
+.chat-msg-assistant .markdown-body h3 { font-size: 0.95rem; }
+
+.chat-msg-assistant .markdown-body p,
+.chat-msg-assistant .markdown-body ul,
+.chat-msg-assistant .markdown-body ol,
+.chat-msg-assistant .markdown-body blockquote,
+.chat-msg-assistant .markdown-body pre,
+.chat-msg-assistant .markdown-body table {
+  margin: 0 0 0.6rem;
+}
+
+.chat-msg-assistant .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-msg-assistant .markdown-body pre {
+  padding: 0.65rem 0.8rem;
+  font-size: 0.8rem;
+}
+
+.chat-msg-assistant .markdown-body code {
+  font-size: 0.85em;
+}
+
+.chat-msg-assistant .markdown-body ul,
+.chat-msg-assistant .markdown-body ol {
+  padding-left: 1.25rem;
 }
 
 .chat-msg-user + .chat-msg-assistant,

@@ -1,6 +1,6 @@
 # Open Pouch 🦘
 
-Capture and organize context memory for AI agents
+Capture and  context memory for AI agents
 
 #### What the app actually does:
 
@@ -9,6 +9,7 @@ Capture and organize context memory for AI agents
 - Stores content as searchable memories (via Mem0) organized by project
 - Lets you manually add notes/facts as memories too
 - Provides search and a knowledge graph across memories
+- Integrate with any coding agent (Cursor, Claude, etc) using MCP
 
 
 ## Prerequisites

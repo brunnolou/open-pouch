@@ -8,11 +8,14 @@ import { createMarkdownFileName } from '../workflows/url_ingest/utils.js';
 import {
   AuthStorage,
   createAgentSession,
+  createSyntheticSourceInfo,
+  DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
   codingTools,
   type AgentSession,
-  type AgentSessionEvent
+  type AgentSessionEvent,
+  type Skill
 } from '@mariozechner/pi-coding-agent';
 
 const __filename = fileURLToPath( import.meta.url );
@@ -255,6 +258,29 @@ ipcMain.handle( 'content:read-file', async ( _event, payload: { filePath: string
   return readFile( path.resolve( target ), 'utf8' );
 } );
 
+ipcMain.handle( 'content:write-file', async ( _event, payload: { filePath: string; markdown: string } ) => {
+  if ( !contentDir ) {
+    throw new Error( 'Content directory is not ready yet.' );
+  }
+
+  const target = payload.filePath;
+  if ( !target || typeof target !== 'string' ) {
+    throw new Error( 'filePath is required.' );
+  }
+
+  if ( typeof payload.markdown !== 'string' ) {
+    throw new Error( 'markdown is required.' );
+  }
+
+  if ( !isPathInsideContentDir( target, contentDir ) ) {
+    throw new Error( 'Access denied.' );
+  }
+
+  const resolvedPath = path.resolve( target );
+  await writeFile( resolvedPath, payload.markdown, 'utf8' );
+  return { saved: true, filePath: resolvedPath };
+} );
+
 ipcMain.handle( 'output:render-markdown', async ( _event, payload: { markdown: string } ) => {
   const rendered = await marked.parse( payload.markdown );
 
@@ -407,12 +433,33 @@ async function initAgentSession() {
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create( authStorage );
 
+  const skillBaseDir = path.join( __dirname, '..', 'skills', 'brainstorming' );
+  const skillFilePath = path.join( skillBaseDir, 'SKILL.md' );
+  const brainstormingSkill: Skill = {
+    name: 'brainstorming',
+    description: 'Explores user intent, requirements and design before implementation through collaborative dialogue.',
+    filePath: skillFilePath,
+    baseDir: skillBaseDir,
+    sourceInfo: createSyntheticSourceInfo( skillFilePath, { source: 'open-pouch', scope: 'project' } ),
+    disableModelInvocation: false
+  };
+
+  const resourceLoader = new DefaultResourceLoader( {
+    cwd: contentDir,
+    skillsOverride: ( current ) => ( {
+      skills: [ ...current.skills, brainstormingSkill ],
+      diagnostics: current.diagnostics
+    } )
+  } );
+  await resourceLoader.reload();
+
   const { session } = await createAgentSession( {
     cwd: contentDir,
     tools: codingTools,
     sessionManager: SessionManager.inMemory(),
     authStorage,
-    modelRegistry
+    modelRegistry,
+    resourceLoader
   } );
 
   agentSession = session;
@@ -455,6 +502,27 @@ ipcMain.handle( 'agent:abort', async () => {
     await agentSession.abort();
   }
   return { ok: true };
+} );
+
+ipcMain.handle( 'agent:clear', async () => {
+  if ( agentUnsubscribe ) {
+    agentUnsubscribe();
+    agentUnsubscribe = null;
+  }
+  if ( agentSession ) {
+    agentSession.dispose();
+    agentSession = null;
+  }
+
+  try {
+    await initAgentSession();
+    return { ok: true };
+  } catch ( error ) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Failed to create new session.'
+    };
+  }
 } );
 
 ipcMain.handle( 'agent:get-content-dir', () => contentDir );

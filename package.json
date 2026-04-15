@@ -11,13 +11,16 @@
     "output:worker": "npm run output:worker:install && npm run output:worker:build && npm run output:worker:start",
     "output:worker:watch": "npx nodemon --watch src --watch package.json --ext ts,js,json,prompt,md --ignore 'dist/**' --ignore '**/*.spec.*' --ignore '**/*.test.*' --exec 'npm run output:worker'",
     "output:dev": "output dev",
-    "desktop:assets": "tailwindcss -i ./src/electron/styles.css -o ./dist/electron/styles.css --minify && cp ./src/electron/index.html ./dist/electron/index.html",
-    "desktop:build": "npm run output:worker:build && npm run desktop:assets",
+    "desktop:assets": "tailwindcss -i ./src/electron/styles.css -o ./dist/electron/styles.css --minify && cp ./src/electron/index.html ./dist/electron/index.html && rm -rf ./dist/skills && cp -r ./src/skills ./dist/skills",
+    "desktop:bundle-renderer": "esbuild ./src/electron/renderer.js --bundle --format=esm --platform=browser --outfile=./dist/electron/renderer.js",
+    "desktop:build": "npm run output:worker:build && npm run desktop:assets && npm run desktop:bundle-renderer",
     "desktop:start": "npm run desktop:build && electron ./dist/electron/main.js"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.67.2",
+    "@milkdown/crepe": "^7.20.0",
     "@outputai/output": "0.1.12",
+    "esbuild": "^0.28.0",
     "marked": "^18.0.0",
     "sanitize-html": "^2.17.2"
   },
