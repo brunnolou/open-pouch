@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked } from 'marked';
@@ -30,6 +31,12 @@ const OUTPUT_API_URL = process.env.OUTPUT_API_URL ?? 'http://localhost:3001';
 const MEM0_API_URL = process.env.MEM0_API_URL ?? 'http://localhost:8888';
 const UNASSIGNED_PROJECT = 'unassigned';
 const DEFAULT_MEM0_USER_ID = 'open-pouch';
+
+/** Optional Neo4j graph cleanup after Mem0 deletes a memory (see mem0ai/mem0#3245). */
+const NEO4J_HTTP_URL = process.env.NEO4J_HTTP_URL?.replace( /\/$/, '' ) ?? '';
+const NEO4J_DATABASE = process.env.NEO4J_DATABASE ?? 'neo4j';
+const NEO4J_USER = process.env.NEO4J_USER ?? 'neo4j';
+const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD ?? '';
 
 interface OutputErrorResponse {
   message?: string;
@@ -67,6 +74,55 @@ function isPathInsideContentDir( filePath: string, dir: string ): boolean {
   return relative !== '' && !relative.startsWith( '..' ) && !path.isAbsolute( relative );
 }
 
+function deriveManualMemoryTitle( markdown: string ) {
+  const headingMatch = markdown.match( /^\s*#\s+(.+)$/m );
+  if ( headingMatch?.[1]?.trim() ) {
+    return headingMatch[1].trim();
+  }
+
+  const firstContentLine = markdown
+    .split( '\n' )
+    .map( line => line.trim() )
+    .find( Boolean );
+
+  if ( firstContentLine ) {
+    return firstContentLine.slice( 0, 80 );
+  }
+
+  return `Untitled note ${new Date().toLocaleString( 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } )}`;
+}
+
+function summarizeMarkdownForMemory( markdown: string ) {
+  const condensed = markdown
+    .replace( /^#{1,6}\s+/gm, '' )
+    .replace( /`{1,3}[^`]*`{1,3}/g, ' ' )
+    .replace( /\[(.*?)\]\((.*?)\)/g, '$1' )
+    .replace( /[*_>-]/g, ' ' )
+    .replace( /\s+/g, ' ' )
+    .trim();
+
+  return condensed.slice( 0, 280 ) || 'New note';
+}
+
+async function createUniqueMarkdownPath( dir: string, title: string ) {
+  const baseFileName = createMarkdownFileName( title );
+  const extension = path.extname( baseFileName ) || '.md';
+  const nameWithoutExt = path.basename( baseFileName, extension );
+
+  for ( let suffix = 0; suffix < 1000; suffix += 1 ) {
+    const candidateName = suffix === 0 ? baseFileName : `${nameWithoutExt}-${suffix + 1}${extension}`;
+    const candidatePath = path.join( dir, candidateName );
+
+    try {
+      await access( candidatePath );
+    } catch {
+      return candidatePath;
+    }
+  }
+
+  throw new Error( 'Unable to allocate a unique markdown file name.' );
+}
+
 async function apiRequest<T>( pathname: string, init?: RequestInit ): Promise<T> {
   const response = await fetch( `${OUTPUT_API_URL}${pathname}`, {
     ...init,
@@ -101,6 +157,46 @@ async function mem0Request<T>( pathname: string, init?: RequestInit ): Promise<T
   }
 
   return payload;
+}
+
+/**
+ * Detach-delete graph nodes tied to a Mem0 memory id (Mem0 graph memory / Neo4j).
+ * Best-effort: logs warnings only; Mem0 vector delete has already succeeded.
+ */
+async function neo4jCascadeDetachMemory( memoryId: string ): Promise<void> {
+  if ( !NEO4J_HTTP_URL || !NEO4J_PASSWORD ) {
+    return;
+  }
+
+  const auth = Buffer.from( `${NEO4J_USER}:${NEO4J_PASSWORD}` ).toString( 'base64' );
+  const url = `${NEO4J_HTTP_URL}/db/${encodeURIComponent( NEO4J_DATABASE )}/tx/commit`;
+  const statement = 'MATCH (n) WHERE n.id = $memory_id OR n.memory_id = $memory_id DETACH DELETE n';
+
+  try {
+    const res = await fetch( url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify( {
+        statements: [ { statement, parameters: { memory_id: memoryId } } ]
+      } )
+    } );
+
+    const payload = await res.json().catch( () => ( {} ) ) as {
+      errors?: Array<{ code?: string; message?: string }>;
+    };
+
+    if ( !res.ok || payload.errors?.length ) {
+      const msg = !res.ok
+        ? `HTTP ${res.status}`
+        : ( payload.errors?.map( e => e.message ?? e.code ).join( '; ' ) ?? 'unknown' );
+      console.warn( `[open-pouch] Neo4j cascade failed for memory ${memoryId}: ${msg}` );
+    }
+  } catch ( err ) {
+    console.warn( `[open-pouch] Neo4j cascade failed for memory ${memoryId}:`, err );
+  }
 }
 
 async function getOutputHealth() {
@@ -218,6 +314,7 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
         ],
         user_id: projectUserId( payload.project ),
         metadata: {
+          project: targetProject,
           source_type: 'article',
           source_url: output.url,
           file_path: filePath,
@@ -281,6 +378,53 @@ ipcMain.handle( 'content:write-file', async ( _event, payload: { filePath: strin
   return { saved: true, filePath: resolvedPath };
 } );
 
+ipcMain.handle( 'content:create-memory-file', async ( _event, payload: { markdown: string; project?: string } ) => {
+  if ( !contentDir ) {
+    throw new Error( 'Content directory is not ready yet.' );
+  }
+
+  if ( typeof payload.markdown !== 'string' || !payload.markdown.trim() ) {
+    throw new Error( 'markdown is required.' );
+  }
+
+  const project = resolveProjectName( payload.project );
+  const title = deriveManualMemoryTitle( payload.markdown );
+  const filePath = await createUniqueMarkdownPath( contentDir, title );
+  await writeFile( filePath, payload.markdown, 'utf8' );
+
+  const summary = summarizeMarkdownForMemory( payload.markdown );
+
+  try {
+    await mem0Request( '/memories', {
+      method: 'POST',
+      body: JSON.stringify( {
+        messages: [
+          { role: 'user', content: `I wrote a note called "${title}" for the ${project} project. Here is the content:\n\n${payload.markdown.slice( 0, 3000 )}` },
+          { role: 'assistant', content: `I've stored the note "${title}" in memory for the ${project} project.` }
+        ],
+        user_id: projectUserId( payload.project ),
+        metadata: {
+          project,
+          source_type: 'note',
+          file_path: filePath,
+          title,
+          tags: 'manual,note'
+        }
+      } )
+    } );
+  } catch {
+    // Memory storage is best-effort; don't fail file creation.
+  }
+
+  return {
+    project,
+    title,
+    filePath,
+    markdown: payload.markdown,
+    memory: summary
+  };
+} );
+
 ipcMain.handle( 'output:render-markdown', async ( _event, payload: { markdown: string } ) => {
   const rendered = await marked.parse( payload.markdown );
 
@@ -335,6 +479,7 @@ ipcMain.handle( 'mem0:search', async ( _event, payload: { project: string; query
 } );
 
 ipcMain.handle( 'mem0:add-memory', async ( _event, payload: { project: string; content: string; metadata?: Record<string, string> } ) => {
+  const projectSlug = resolveProjectName( payload.project );
   return mem0Request( '/memories', {
     method: 'POST',
     body: JSON.stringify( {
@@ -344,7 +489,8 @@ ipcMain.handle( 'mem0:add-memory', async ( _event, payload: { project: string; c
       user_id: projectUserId( payload.project ),
       metadata: {
         source_type: 'manual',
-        ...( payload.metadata ?? {} )
+        ...( payload.metadata ?? {} ),
+        project: projectSlug
       }
     } )
   } );
@@ -354,13 +500,30 @@ ipcMain.handle( 'mem0:delete-memory', async ( _event, payload: { memoryId: strin
   await mem0Request( `/memories/${encodeURIComponent( payload.memoryId )}`, {
     method: 'DELETE'
   } );
+  await neo4jCascadeDetachMemory( payload.memoryId );
   return { deleted: true };
 } );
 
 ipcMain.handle( 'mem0:delete-project', async ( _event, payload: { project: string } ) => {
-  await mem0Request( `/memories?user_id=${encodeURIComponent( projectUserId( payload.project ) )}`, {
+  const uid = projectUserId( payload.project );
+  let memoryIds: string[] = [];
+  try {
+    const list = await mem0Request<{ results?: Array<{ id: string }> }>(
+      `/memories?user_id=${encodeURIComponent( uid )}`
+    );
+    memoryIds = ( list.results ?? [] ).map( m => m.id );
+  } catch {
+    // Still delete via Mem0; graph cascade may be incomplete if listing failed or is paginated.
+  }
+
+  await mem0Request( `/memories?user_id=${encodeURIComponent( uid )}`, {
     method: 'DELETE'
   } );
+
+  for ( const id of memoryIds ) {
+    await neo4jCascadeDetachMemory( id );
+  }
+
   return { deleted: true };
 } );
 

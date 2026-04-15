@@ -1,4 +1,5 @@
 import { Crepe } from '@milkdown/crepe';
+import { marked } from 'marked';
 
 const api = window.openPouchDesktop;
 
@@ -39,6 +40,12 @@ const memoryListEl = $( '#memory-list' );
 const emptyMemoriesEl = $( '#empty-memories' );
 const memoryCountEl = $( '#memory-count' );
 const searchInput = $( '#search-input' );
+const memoryContentInput = $( '#memory-content-input' );
+const memoryCreateStatus = $( '#memory-create-status' );
+const btnCreateMemoryFile = $( '#btn-create-memory-file' );
+const memoryIngestUrlInput = $( '#memory-ingest-url-input' );
+const btnMemoryIngest = $( '#btn-memory-ingest' );
+const memoryIngestStatus = $( '#memory-ingest-status' );
 
 const tabMemories = $( '#tab-memories' );
 const tabIngest = $( '#tab-ingest' );
@@ -48,8 +55,6 @@ const btnTabIngest = $( '#btn-tab-ingest' );
 const mem0Dot = $( '#mem0-dot' );
 const mem0Label = $( '#mem0-label' );
 
-const modalAddMemory = $( '#modal-add-memory' );
-const memoryContentInput = $( '#memory-content-input' );
 const modalNewProject = $( '#modal-new-project' );
 const projectNameInput = $( '#project-name-input' );
 
@@ -83,6 +88,9 @@ const chatInput = $( '#chat-input' );
 const btnChatSend = $( '#btn-chat-send' );
 const agentDot = $( '#agent-dot' );
 const agentLabel = $( '#agent-label' );
+const chatFilePill = $( '#chat-file-pill' );
+const chatFileName = $( '#chat-file-name' );
+const btnDetachFile = $( '#btn-detach-file' );
 
 function formatIngestMeta( payload ) {
   const parts = [ payload.url ];
@@ -120,6 +128,28 @@ function switchTab( tab ) {
 btnTabMemories.addEventListener( 'click', () => switchTab( 'memories' ) );
 btnTabIngest.addEventListener( 'click', () => switchTab( 'ingest' ) );
 
+// ── Chat file pill ──────────────────────────────────────────────────────────
+
+let chatAttachedFile = null;
+
+function syncChatFilePill() {
+  if ( chatAttachedFile ) {
+    const name = chatAttachedFile.title || chatAttachedFile.filePath.split( '/' ).pop();
+    chatFileName.textContent = name;
+    chatFileName.title = chatAttachedFile.filePath;
+    chatFilePill.classList.remove( 'hidden' );
+    chatFilePill.classList.add( 'flex' );
+  } else {
+    chatFilePill.classList.add( 'hidden' );
+    chatFilePill.classList.remove( 'flex' );
+  }
+}
+
+btnDetachFile.addEventListener( 'click', () => {
+  chatAttachedFile = null;
+  syncChatFilePill();
+} );
+
 // ── Inline document viewer ──────────────────────────────────────────────────
 
 function closeDocViewer() {
@@ -133,6 +163,8 @@ function closeDocViewer() {
   tabMemories.classList.remove( 'hidden' );
   teardownDocEditor();
   activeDocument = null;
+  chatAttachedFile = null;
+  syncChatFilePill();
   docViewerBody.innerHTML = '';
   setDocStatus( 'Saved' );
   return true;
@@ -276,6 +308,8 @@ async function showDocumentFromFile( mem ) {
     isDirty: false,
     isSaving: false
   };
+  chatAttachedFile = { filePath, title: mem.metadata?.title || mem.memory };
+  syncChatFilePill();
   setDocStatus( 'Loading…' );
   syncDocActions();
 
@@ -449,6 +483,23 @@ function updateCount( memories, relations ) {
   memoryCountEl.textContent = parts.join( ' · ' ) || '';
 }
 
+function setMemoryCreateStatus( message, tone = 'muted' ) {
+  memoryCreateStatus.textContent = message;
+  memoryCreateStatus.className = 'min-h-5 text-xs';
+
+  if ( tone === 'error' ) {
+    memoryCreateStatus.classList.add( 'text-destructive' );
+    return;
+  }
+
+  if ( tone === 'success' ) {
+    memoryCreateStatus.classList.add( 'text-primary' );
+    return;
+  }
+
+  memoryCreateStatus.classList.add( 'text-muted-foreground' );
+}
+
 // ── Load memories ───────────────────────────────────────────────────────────
 
 async function loadMemories() {
@@ -487,42 +538,60 @@ searchInput.addEventListener( 'input', () => {
   }, 400 );
 } );
 
-// ── Add memory modal ────────────────────────────────────────────────────────
+// ── Memory file composer ────────────────────────────────────────────────────
 
-$( '#btn-add-memory' ).addEventListener( 'click', () => {
-  if ( !activeProject ) {
-    alert( 'Select a project first.' );
+async function createMemoryFile() {
+  const markdown = memoryContentInput.value.trim();
+  const targetProject = activeProject || UNASSIGNED_PROJECT;
+
+  if ( !markdown ) {
+    setMemoryCreateStatus( 'Write some markdown before creating the note.', 'error' );
+    memoryContentInput.focus();
     return;
   }
-  memoryContentInput.value = '';
-  modalAddMemory.classList.remove( 'hidden' );
-  modalAddMemory.classList.add( 'flex' );
-  memoryContentInput.focus();
-} );
 
-$( '#btn-cancel-memory' ).addEventListener( 'click', () => {
-  modalAddMemory.classList.add( 'hidden' );
-  modalAddMemory.classList.remove( 'flex' );
-} );
-
-$( '#btn-save-memory' ).addEventListener( 'click', async () => {
-  const content = memoryContentInput.value.trim();
-  if ( !content || !activeProject ) return;
-
-  const btn = $( '#btn-save-memory' );
-  btn.disabled = true;
-  btn.textContent = 'Saving...';
+  btnCreateMemoryFile.disabled = true;
+  btnCreateMemoryFile.textContent = 'Creating...';
+  setMemoryCreateStatus( `Creating note in "${targetProject}"...` );
 
   try {
-    await api.addMemory( activeProject, content );
-    modalAddMemory.classList.add( 'hidden' );
-    modalAddMemory.classList.remove( 'flex' );
+    const created = await api.createMemoryFile( markdown, targetProject );
+
+    if ( !projects.includes( created.project ) ) {
+      projects.push( created.project );
+      saveProjects();
+    }
+
+    activeProject = created.project;
+    memoryContentInput.value = '';
+    setMemoryCreateStatus( `Saved "${created.title}" and opened it in the editor.`, 'success' );
+    renderProjects();
     await loadMemories();
+    await showDocumentFromFile( {
+      memory: created.memory,
+      metadata: {
+        file_path: created.filePath,
+        title: created.title,
+        source_type: 'note',
+        tags: 'manual,note'
+      }
+    } );
   } catch ( err ) {
-    alert( 'Failed to save: ' + err.message );
+    setMemoryCreateStatus( err instanceof Error ? err.message : String( err ), 'error' );
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Save Memory';
+    btnCreateMemoryFile.disabled = false;
+    btnCreateMemoryFile.textContent = 'Create Note';
+  }
+}
+
+btnCreateMemoryFile.addEventListener( 'click', () => {
+  void createMemoryFile();
+} );
+
+memoryContentInput.addEventListener( 'keydown', ( e ) => {
+  if ( ( e.metaKey || e.ctrlKey ) && e.key === 'Enter' ) {
+    e.preventDefault();
+    void createMemoryFile();
   }
 } );
 
@@ -582,34 +651,44 @@ function updateIngestBadge() {
   }
 }
 
-ingestForm.addEventListener( 'submit', async ( e ) => {
-  e.preventDefault();
-  const url = urlInput.value.trim();
+async function runIngest( url, options = {} ) {
   if ( !url ) {
-    ingestStatus.textContent = 'Enter a URL.';
+    const statusEl = options.statusEl || ingestStatus;
+    statusEl.textContent = 'Enter a URL.';
     return;
   }
 
-  btnIngest.disabled = true;
-  btnIngest.textContent = 'Ingesting...';
-  ingestStatus.textContent = `Running generic ingest for "${activeProject || UNASSIGNED_PROJECT}"...`;
-  ingestResult.classList.add( 'hidden' );
-  ingestResult.classList.remove( 'flex' );
+  const buttonEl = options.buttonEl || btnIngest;
+  const statusEl = options.statusEl || ingestStatus;
+  const resetLabel = options.buttonLabel || 'Ingest URL';
+
+  buttonEl.disabled = true;
+  buttonEl.textContent = 'Ingesting...';
+  statusEl.textContent = `Running generic ingest for "${activeProject || UNASSIGNED_PROJECT}"...`;
+
+  if ( !options.inlineOnly ) {
+    ingestResult.classList.add( 'hidden' );
+    ingestResult.classList.remove( 'flex' );
+  }
 
   try {
     const payload = await api.ingestUrl( url, activeProject || undefined );
-    ingestTitle.textContent = payload.title;
-    ingestMeta.textContent = formatIngestMeta( payload );
 
-    if ( api.renderMarkdown ) {
-      ingestMarkdown.innerHTML = await api.renderMarkdown( payload.markdown );
-    } else {
-      ingestMarkdown.textContent = payload.markdown;
+    if ( !options.inlineOnly ) {
+      ingestTitle.textContent = payload.title;
+      ingestMeta.textContent = formatIngestMeta( payload );
+
+      if ( api.renderMarkdown ) {
+        ingestMarkdown.innerHTML = await api.renderMarkdown( payload.markdown );
+      } else {
+        ingestMarkdown.textContent = payload.markdown;
+      }
+
+      ingestResult.classList.remove( 'hidden' );
+      ingestResult.classList.add( 'flex' );
     }
 
-    ingestResult.classList.remove( 'hidden' );
-    ingestResult.classList.add( 'flex' );
-    ingestStatus.textContent = `Ingest complete. Markdown saved locally and memory added to "${payload.project || UNASSIGNED_PROJECT}".`;
+    statusEl.textContent = `Ingest complete. Markdown saved locally and memory added to "${payload.project || UNASSIGNED_PROJECT}".`;
 
     if ( !projects.includes( payload.project ) ) {
       projects.push( payload.project );
@@ -617,12 +696,41 @@ ingestForm.addEventListener( 'submit', async ( e ) => {
       renderProjects();
     }
 
+    if ( options.inlineOnly ) {
+      memoryIngestUrlInput.value = '';
+    }
+
     setTimeout( loadMemories, 1000 );
   } catch ( err ) {
-    ingestStatus.textContent = err.message;
+    statusEl.textContent = err.message;
   } finally {
-    btnIngest.disabled = false;
-    btnIngest.textContent = 'Ingest URL';
+    buttonEl.disabled = false;
+    buttonEl.textContent = resetLabel;
+  }
+}
+
+ingestForm.addEventListener( 'submit', async ( e ) => {
+  e.preventDefault();
+  const url = urlInput.value.trim();
+  await runIngest( url );
+} );
+
+btnMemoryIngest.addEventListener( 'click', () => {
+  void runIngest( memoryIngestUrlInput.value.trim(), {
+    buttonEl: btnMemoryIngest,
+    statusEl: memoryIngestStatus,
+    inlineOnly: true
+  } );
+} );
+
+memoryIngestUrlInput.addEventListener( 'keydown', ( e ) => {
+  if ( e.key === 'Enter' ) {
+    e.preventDefault();
+    void runIngest( memoryIngestUrlInput.value.trim(), {
+      buttonEl: btnMemoryIngest,
+      statusEl: memoryIngestStatus,
+      inlineOnly: true
+    } );
   }
 } );
 
@@ -672,13 +780,9 @@ function addChatMessage( role, content ) {
 let assistantRawBuffer = '';
 
 function renderMarkdownToEl( el, md ) {
-  if ( api.parseMarkdown ) {
-    el.innerHTML = api.parseMarkdown( md );
-    el.classList.remove( 'whitespace-pre-wrap' );
-    el.classList.add( 'markdown-body' );
-  } else {
-    el.textContent = md;
-  }
+  el.innerHTML = marked.parse( md, { async: false } );
+  el.classList.remove( 'whitespace-pre-wrap' );
+  el.classList.add( 'markdown-body' );
 }
 
 function appendToLastAssistant( text ) {
@@ -858,7 +962,12 @@ async function sendChatMessage() {
 
   addChatMessage( 'user', text );
 
-  const result = await api.agentPrompt( text );
+  let prompt = text;
+  if ( chatAttachedFile ) {
+    prompt = `[Attached file: ${chatAttachedFile.filePath}]\n\n${text}`;
+  }
+
+  const result = await api.agentPrompt( prompt );
   if ( !result.ok ) {
     addChatMessage( 'assistant', `Error: ${result.error}` );
     setAgentStatus( 'Error', 'bg-destructive' );
@@ -913,8 +1022,6 @@ async function initAgent() {
 
 document.addEventListener( 'keydown', ( e ) => {
   if ( e.key === 'Escape' ) {
-    modalAddMemory.classList.add( 'hidden' );
-    modalAddMemory.classList.remove( 'flex' );
     modalNewProject.classList.add( 'hidden' );
     modalNewProject.classList.remove( 'flex' );
     if ( docViewer.classList.contains( 'flex' ) ) {
@@ -947,6 +1054,8 @@ document.addEventListener( 'keydown', ( e ) => {
 if ( projects.length > 0 ) {
   activeProject = projects[0];
 }
+
+setMemoryCreateStatus( 'New notes are saved into the selected project\'s local markdown files.' );
 
 renderProjects();
 loadMemories();
