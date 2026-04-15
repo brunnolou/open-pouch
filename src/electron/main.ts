@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { Buffer } from 'node:buffer';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked } from 'marked';
@@ -23,9 +23,12 @@ const __filename = fileURLToPath( import.meta.url );
 const __dirname = path.dirname( __filename );
 
 let mainWindow: BrowserWindow | null = null;
-let contentDir = '';
+/** Root directory containing one folder per project (folder name === Mem0 / UI slug). */
+let projectsRoot = '';
 let agentSession: AgentSession | null = null;
 let agentUnsubscribe: ( () => void ) | null = null;
+/** Project slug whose folder is the Pi agent cwd (filesystem source of truth). */
+let agentWorkingProject = 'unassigned';
 
 const OUTPUT_API_URL = process.env.OUTPUT_API_URL ?? 'http://localhost:3001';
 const MEM0_API_URL = process.env.MEM0_API_URL ?? 'http://localhost:8888';
@@ -67,11 +70,87 @@ function projectUserId( project?: string ) {
   return `project:${resolvedProject}`;
 }
 
-function isPathInsideContentDir( filePath: string, dir: string ): boolean {
+function sanitizeProjectSlug( raw: string ) {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace( /[^a-z0-9_-]/g, '-' )
+    .replace( /-+/g, '-' )
+    .replace( /^-|-$/g, '' );
+}
+
+function getProjectContentDir( project?: string ) {
+  const slug = resolveProjectName( project );
+  return path.join( projectsRoot, slug );
+}
+
+function isPathInsideProjectsRoot( filePath: string ): boolean {
+  if ( !projectsRoot ) {
+    return false;
+  }
+
   const resolved = path.resolve( filePath );
-  const base = path.resolve( dir );
+  const base = path.resolve( projectsRoot );
   const relative = path.relative( base, resolved );
   return relative !== '' && !relative.startsWith( '..' ) && !path.isAbsolute( relative );
+}
+
+async function migrateLegacyIngestedContent() {
+  const legacyDir = path.join( app.getPath( 'userData' ), 'ingested-content' );
+  const destDir = getProjectContentDir( UNASSIGNED_PROJECT );
+
+  try {
+    const entries = await readdir( legacyDir, { withFileTypes: true } );
+    if ( entries.length === 0 ) {
+      await rm( legacyDir, { recursive: true, force: true } );
+      return;
+    }
+
+    await mkdir( destDir, { recursive: true } );
+
+    for ( const ent of entries ) {
+      if ( !ent.isFile() ) {
+        continue;
+      }
+
+      const from = path.join( legacyDir, ent.name );
+      const to = path.join( destDir, ent.name );
+
+      try {
+        await rename( from, to );
+      } catch {
+        // Name collision or permission — leave file in legacy dir
+      }
+    }
+
+    const remaining = await readdir( legacyDir );
+    if ( remaining.length === 0 ) {
+      await rm( legacyDir, { recursive: true, force: true } );
+    }
+  } catch {
+    // No legacy folder
+  }
+}
+
+async function ensureProjectsLayout() {
+  projectsRoot = path.join( app.getPath( 'userData' ), 'projects' );
+  await mkdir( projectsRoot, { recursive: true } );
+  await mkdir( getProjectContentDir( UNASSIGNED_PROJECT ), { recursive: true } );
+  await migrateLegacyIngestedContent();
+}
+
+async function listProjectSlugs(): Promise<string[]> {
+  const entries = await readdir( projectsRoot, { withFileTypes: true } );
+  const dirs = new Set(
+    entries.filter( e => e.isDirectory() && !e.name.startsWith( '.' ) ).map( e => e.name )
+  );
+  dirs.add( UNASSIGNED_PROJECT );
+
+  const rest = [ ...dirs ]
+    .filter( n => n !== UNASSIGNED_PROJECT )
+    .sort( ( a, b ) => a.localeCompare( b ) );
+
+  return [ UNASSIGNED_PROJECT, ...rest ];
 }
 
 function deriveManualMemoryTitle( markdown: string ) {
@@ -248,8 +327,7 @@ async function waitForWorkflowResult( workflowId: string ) {
 }
 
 async function createMainWindow() {
-  contentDir = path.join( app.getPath( 'userData' ), 'ingested-content' );
-  await mkdir( contentDir, { recursive: true } );
+  await ensureProjectsLayout();
 
   mainWindow = new BrowserWindow( {
     width: 1440,
@@ -278,6 +356,89 @@ ipcMain.handle( 'output:get-config', async () => ( {
   mem0BaseUrl: MEM0_API_URL
 } ) );
 
+function disposeAgentSession() {
+  if ( agentUnsubscribe ) {
+    agentUnsubscribe();
+    agentUnsubscribe = null;
+  }
+
+  if ( agentSession ) {
+    agentSession.dispose();
+    agentSession = null;
+  }
+}
+
+ipcMain.handle( 'projects:list', async () => listProjectSlugs() );
+
+ipcMain.handle( 'projects:create', async ( _event, payload: { slug: string } ) => {
+  if ( !projectsRoot ) {
+    throw new Error( 'Projects are not initialised yet.' );
+  }
+
+  const slug = sanitizeProjectSlug( payload.slug );
+
+  if ( !slug ) {
+    throw new Error( 'Project name is required.' );
+  }
+
+  if ( slug === 'default' ) {
+    throw new Error( `Use "${UNASSIGNED_PROJECT}" instead of "default".` );
+  }
+
+  const dir = getProjectContentDir( slug );
+
+  const exists = await access( dir ).then( () => true, () => false );
+  if ( exists ) {
+    throw new Error( `Project "${slug}" already exists.` );
+  }
+
+  await mkdir( dir, { recursive: true } );
+  return { project: slug };
+} );
+
+ipcMain.handle( 'projects:rename', async ( _event, payload: { from: string; to: string } ) => {
+  if ( !projectsRoot ) {
+    throw new Error( 'Projects are not initialised yet.' );
+  }
+
+  const fromSlug = sanitizeProjectSlug( payload.from );
+  const toSlug = sanitizeProjectSlug( payload.to );
+
+  if ( !fromSlug || !toSlug || fromSlug === toSlug ) {
+    throw new Error( 'Invalid rename.' );
+  }
+
+  if ( fromSlug === UNASSIGNED_PROJECT ) {
+    throw new Error( `Cannot rename "${UNASSIGNED_PROJECT}".` );
+  }
+
+  if ( toSlug === 'default' ) {
+    throw new Error( `Use "${UNASSIGNED_PROJECT}" instead of "default".` );
+  }
+
+  const oldPath = path.join( projectsRoot, fromSlug );
+  const newPath = path.join( projectsRoot, toSlug );
+
+  const srcExists = await access( oldPath ).then( () => true, () => false );
+  if ( !srcExists ) {
+    throw new Error( `Project folder "${fromSlug}" not found.` );
+  }
+
+  const destExists = await access( newPath ).then( () => true, () => false );
+  if ( destExists ) {
+    throw new Error( `Project "${toSlug}" already exists.` );
+  }
+
+  await rename( oldPath, newPath );
+
+  if ( agentWorkingProject === fromSlug ) {
+    agentWorkingProject = toSlug;
+    disposeAgentSession();
+  }
+
+  return { from: fromSlug, to: toSlug };
+} );
+
 ipcMain.handle( 'output:health', async () => {
   try {
     const ok = await getOutputHealth();
@@ -300,8 +461,10 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
     throw new Error( result.error ?? 'Workflow completed without markdown output.' );
   }
 
+  const projectDir = getProjectContentDir( targetProject );
+  await mkdir( projectDir, { recursive: true } );
   const fileName = createMarkdownFileName( output.title );
-  const filePath = path.join( contentDir, fileName );
+  const filePath = path.join( projectDir, fileName );
   await writeFile( filePath, output.markdown, 'utf8' );
 
   try {
@@ -309,10 +472,10 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
       method: 'POST',
       body: JSON.stringify( {
         messages: [
-          { role: 'user', content: `I ingested this article: "${output.title}" from ${output.url}. Here is a summary of the content:\n\n${output.markdown.slice( 0, 3000 )}` },
-          { role: 'assistant', content: `I've stored the article "${output.title}" in memory for the ${targetProject} project.` }
+          { role: 'user', content: `# ${output.title}\nSource: ${output.url}\n\n${output.markdown.slice( 0, 3000 )}` }
         ],
         user_id: projectUserId( payload.project ),
+        infer: false,
         metadata: {
           project: targetProject,
           source_type: 'article',
@@ -323,8 +486,8 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
         }
       } )
     } );
-  } catch {
-    // Memory storage is best-effort; don't fail the ingest
+  } catch ( err ) {
+    console.warn( '[mem0] Failed to store memory for ingested article:', err );
   }
 
   return {
@@ -339,8 +502,8 @@ ipcMain.handle( 'output:ingest-url', async ( _event, payload: { url: string; pro
 } );
 
 ipcMain.handle( 'content:read-file', async ( _event, payload: { filePath: string } ) => {
-  if ( !contentDir ) {
-    throw new Error( 'Content directory is not ready yet.' );
+  if ( !projectsRoot ) {
+    throw new Error( 'Projects are not initialised yet.' );
   }
 
   const target = payload.filePath;
@@ -348,7 +511,7 @@ ipcMain.handle( 'content:read-file', async ( _event, payload: { filePath: string
     throw new Error( 'filePath is required.' );
   }
 
-  if ( !isPathInsideContentDir( target, contentDir ) ) {
+  if ( !isPathInsideProjectsRoot( target ) ) {
     throw new Error( 'Access denied.' );
   }
 
@@ -356,8 +519,8 @@ ipcMain.handle( 'content:read-file', async ( _event, payload: { filePath: string
 } );
 
 ipcMain.handle( 'content:write-file', async ( _event, payload: { filePath: string; markdown: string } ) => {
-  if ( !contentDir ) {
-    throw new Error( 'Content directory is not ready yet.' );
+  if ( !projectsRoot ) {
+    throw new Error( 'Projects are not initialised yet.' );
   }
 
   const target = payload.filePath;
@@ -369,7 +532,7 @@ ipcMain.handle( 'content:write-file', async ( _event, payload: { filePath: strin
     throw new Error( 'markdown is required.' );
   }
 
-  if ( !isPathInsideContentDir( target, contentDir ) ) {
+  if ( !isPathInsideProjectsRoot( target ) ) {
     throw new Error( 'Access denied.' );
   }
 
@@ -379,8 +542,8 @@ ipcMain.handle( 'content:write-file', async ( _event, payload: { filePath: strin
 } );
 
 ipcMain.handle( 'content:create-memory-file', async ( _event, payload: { markdown: string; project?: string } ) => {
-  if ( !contentDir ) {
-    throw new Error( 'Content directory is not ready yet.' );
+  if ( !projectsRoot ) {
+    throw new Error( 'Projects are not initialised yet.' );
   }
 
   if ( typeof payload.markdown !== 'string' || !payload.markdown.trim() ) {
@@ -388,8 +551,10 @@ ipcMain.handle( 'content:create-memory-file', async ( _event, payload: { markdow
   }
 
   const project = resolveProjectName( payload.project );
+  const projectDir = getProjectContentDir( project );
+  await mkdir( projectDir, { recursive: true } );
   const title = deriveManualMemoryTitle( payload.markdown );
-  const filePath = await createUniqueMarkdownPath( contentDir, title );
+  const filePath = await createUniqueMarkdownPath( projectDir, title );
   await writeFile( filePath, payload.markdown, 'utf8' );
 
   const summary = summarizeMarkdownForMemory( payload.markdown );
@@ -399,10 +564,10 @@ ipcMain.handle( 'content:create-memory-file', async ( _event, payload: { markdow
       method: 'POST',
       body: JSON.stringify( {
         messages: [
-          { role: 'user', content: `I wrote a note called "${title}" for the ${project} project. Here is the content:\n\n${payload.markdown.slice( 0, 3000 )}` },
-          { role: 'assistant', content: `I've stored the note "${title}" in memory for the ${project} project.` }
+          { role: 'user', content: `# ${title}\n\n${payload.markdown.slice( 0, 3000 )}` }
         ],
         user_id: projectUserId( payload.project ),
+        infer: false,
         metadata: {
           project,
           source_type: 'note',
@@ -412,8 +577,8 @@ ipcMain.handle( 'content:create-memory-file', async ( _event, payload: { markdow
         }
       } )
     } );
-  } catch {
-    // Memory storage is best-effort; don't fail file creation.
+  } catch ( err ) {
+    console.warn( '[mem0] Failed to store memory for note:', err );
   }
 
   return {
@@ -524,6 +689,12 @@ ipcMain.handle( 'mem0:delete-project', async ( _event, payload: { project: strin
     await neo4jCascadeDetachMemory( id );
   }
 
+  const slug = resolveProjectName( payload.project );
+
+  if ( slug !== UNASSIGNED_PROJECT ) {
+    await rm( getProjectContentDir( slug ), { recursive: true, force: true } ).catch( () => {} );
+  }
+
   return { deleted: true };
 } );
 
@@ -593,6 +764,9 @@ function serializeEvent( event: AgentSessionEvent ): Record<string, unknown> {
 async function initAgentSession() {
   if ( agentSession ) return;
 
+  const cwd = getProjectContentDir( agentWorkingProject );
+  await mkdir( cwd, { recursive: true } );
+
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create( authStorage );
 
@@ -608,7 +782,7 @@ async function initAgentSession() {
   };
 
   const resourceLoader = new DefaultResourceLoader( {
-    cwd: contentDir,
+    cwd,
     skillsOverride: ( current ) => ( {
       skills: [ ...current.skills, brainstormingSkill ],
       diagnostics: current.diagnostics
@@ -617,7 +791,7 @@ async function initAgentSession() {
   await resourceLoader.reload();
 
   const { session } = await createAgentSession( {
-    cwd: contentDir,
+    cwd,
     tools: codingTools,
     sessionManager: SessionManager.inMemory(),
     authStorage,
@@ -632,14 +806,51 @@ async function initAgentSession() {
   } );
 }
 
-ipcMain.handle( 'agent:init', async () => {
+ipcMain.handle( 'agent:init', async ( _event, payload?: { project?: string } ) => {
   try {
+    if ( payload?.project !== undefined ) {
+      agentWorkingProject = resolveProjectName( payload.project );
+    }
+
+    disposeAgentSession();
     await initAgentSession();
-    return { ok: true };
+    return {
+      ok: true,
+      contentDir: getProjectContentDir( agentWorkingProject ),
+      project: agentWorkingProject
+    };
   } catch ( error ) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'Failed to initialise agent.'
+    };
+  }
+} );
+
+ipcMain.handle( 'agent:set-project', async ( _event, payload: { project: string } ) => {
+  const target = resolveProjectName( payload.project );
+
+  if ( target === agentWorkingProject && agentSession ) {
+    return {
+      ok: true,
+      contentDir: getProjectContentDir( agentWorkingProject ),
+      project: agentWorkingProject
+    };
+  }
+
+  try {
+    agentWorkingProject = target;
+    disposeAgentSession();
+    await initAgentSession();
+    return {
+      ok: true,
+      contentDir: getProjectContentDir( agentWorkingProject ),
+      project: agentWorkingProject
+    };
+  } catch ( error ) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Failed to switch agent project.'
     };
   }
 } );
@@ -668,18 +879,15 @@ ipcMain.handle( 'agent:abort', async () => {
 } );
 
 ipcMain.handle( 'agent:clear', async () => {
-  if ( agentUnsubscribe ) {
-    agentUnsubscribe();
-    agentUnsubscribe = null;
-  }
-  if ( agentSession ) {
-    agentSession.dispose();
-    agentSession = null;
-  }
+  disposeAgentSession();
 
   try {
     await initAgentSession();
-    return { ok: true };
+    return {
+      ok: true,
+      contentDir: getProjectContentDir( agentWorkingProject ),
+      project: agentWorkingProject
+    };
   } catch ( error ) {
     return {
       ok: false,
@@ -688,7 +896,10 @@ ipcMain.handle( 'agent:clear', async () => {
   }
 } );
 
-ipcMain.handle( 'agent:get-content-dir', () => contentDir );
+ipcMain.handle( 'agent:get-content-dir', () => ( {
+  contentDir: getProjectContentDir( agentWorkingProject ),
+  project: agentWorkingProject
+} ) );
 
 // ── App lifecycle ───────────────────────────────────────────────────────────
 
@@ -709,6 +920,5 @@ app.on( 'window-all-closed', async () => {
 } );
 
 app.on( 'before-quit', () => {
-  if ( agentUnsubscribe ) agentUnsubscribe();
-  if ( agentSession ) agentSession.dispose();
+  disposeAgentSession();
 } );

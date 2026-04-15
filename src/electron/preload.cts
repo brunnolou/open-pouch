@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld( 'openPouchDesktop', {
   writeFile: ( filePath: string, markdown: string ) => ipcRenderer.invoke( 'content:write-file', { filePath, markdown } ),
   createMemoryFile: ( markdown: string, project?: string ) => ipcRenderer.invoke( 'content:create-memory-file', { markdown, project } ),
 
+  listProjects: () => ipcRenderer.invoke( 'projects:list' ),
+  createProject: ( slug: string ) => ipcRenderer.invoke( 'projects:create', { slug } ),
+  renameProjectFolder: ( from: string, to: string ) => ipcRenderer.invoke( 'projects:rename', { from, to } ),
+
   mem0Health: () => ipcRenderer.invoke( 'mem0:health' ),
   listMemories: ( project: string ) => ipcRenderer.invoke( 'mem0:list-memories', { project } ),
   searchMemories: ( project: string, query: string ) => ipcRenderer.invoke( 'mem0:search', { project, query } ),
@@ -16,7 +20,8 @@ contextBridge.exposeInMainWorld( 'openPouchDesktop', {
   deleteMemory: ( memoryId: string ) => ipcRenderer.invoke( 'mem0:delete-memory', { memoryId } ),
   deleteProject: ( project: string ) => ipcRenderer.invoke( 'mem0:delete-project', { project } ),
 
-  agentInit: () => ipcRenderer.invoke( 'agent:init' ),
+  agentInit: ( project?: string ) => ipcRenderer.invoke( 'agent:init', { project } ),
+  agentSetProject: ( project: string ) => ipcRenderer.invoke( 'agent:set-project', { project } ),
   agentPrompt: ( message: string ) => ipcRenderer.invoke( 'agent:prompt', { message } ),
   agentAbort: () => ipcRenderer.invoke( 'agent:abort' ),
   agentClear: () => ipcRenderer.invoke( 'agent:clear' ),

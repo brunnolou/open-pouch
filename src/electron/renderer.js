@@ -5,9 +5,8 @@ const api = window.openPouchDesktop;
 
 // ── State ───────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = 'openpouch:projects';
 const UNASSIGNED_PROJECT = 'unassigned';
-let projects = normalizeProjects( JSON.parse( localStorage.getItem( STORAGE_KEY ) || '[]' ) );
+let projects = [];
 let activeProject = null;
 let currentTab = 'memories';
 let searchTimeout = null;
@@ -25,9 +24,21 @@ function normalizeProjects( list ) {
   return Array.from( new Set( [ UNASSIGNED_PROJECT, ...items.filter( project => project !== UNASSIGNED_PROJECT ) ] ) );
 }
 
-function saveProjects() {
-  projects = normalizeProjects( projects );
-  localStorage.setItem( STORAGE_KEY, JSON.stringify( projects ) );
+async function refreshProjectsFromFs() {
+  const list = await api.listProjects();
+  projects = normalizeProjects( list );
+}
+
+async function syncAgentToProject( slug ) {
+  if ( typeof api.agentSetProject !== 'function' || !slug ) {
+    return;
+  }
+
+  try {
+    await api.agentSetProject( slug );
+  } catch {
+    // Best effort — agent may not be initialised yet
+  }
 }
 
 // ── DOM refs ────────────────────────────────────────────────────────────────
@@ -366,20 +377,23 @@ function renderProjects() {
         try {
           await api.deleteProject( name );
         } catch { /* best effort */ }
-        projects = normalizeProjects( projects.filter( p => p !== name ) );
-        saveProjects();
+        await refreshProjectsFromFs();
         if ( activeProject === name ) {
           activeProject = projects[0] || null;
         }
         renderProjects();
-        loadMemories();
+        void loadMemories();
+        if ( activeProject ) {
+          void syncAgentToProject( activeProject );
+        }
       } );
     }
 
     btn.addEventListener( 'click', () => {
       activeProject = name;
       renderProjects();
-      loadMemories();
+      void loadMemories();
+      void syncAgentToProject( name );
     } );
 
     projectListEl.appendChild( btn );
@@ -557,15 +571,12 @@ async function createMemoryFile() {
   try {
     const created = await api.createMemoryFile( markdown, targetProject );
 
-    if ( !projects.includes( created.project ) ) {
-      projects.push( created.project );
-      saveProjects();
-    }
-
+    await refreshProjectsFromFs();
     activeProject = created.project;
     memoryContentInput.value = '';
     setMemoryCreateStatus( `Saved "${created.title}" and opened it in the editor.`, 'success' );
     renderProjects();
+    void syncAgentToProject( created.project );
     await loadMemories();
     await showDocumentFromFile( {
       memory: created.memory,
@@ -609,7 +620,7 @@ $( '#btn-cancel-project' ).addEventListener( 'click', () => {
   modalNewProject.classList.remove( 'flex' );
 } );
 
-$( '#btn-create-project' ).addEventListener( 'click', () => {
+$( '#btn-create-project' ).addEventListener( 'click', async () => {
   const name = projectNameInput.value.trim().toLowerCase().replace( /[^a-z0-9_-]/g, '-' );
   if ( !name ) return;
   if ( name === 'default' ) {
@@ -621,13 +632,20 @@ $( '#btn-create-project' ).addEventListener( 'click', () => {
     return;
   }
 
-  projects.push( name );
-  saveProjects();
+  try {
+    await api.createProject( name );
+  } catch ( err ) {
+    alert( err instanceof Error ? err.message : String( err ) );
+    return;
+  }
+
+  await refreshProjectsFromFs();
   activeProject = name;
   modalNewProject.classList.add( 'hidden' );
   modalNewProject.classList.remove( 'flex' );
   renderProjects();
-  loadMemories();
+  void loadMemories();
+  void syncAgentToProject( name );
 } );
 
 projectNameInput.addEventListener( 'keydown', ( e ) => {
@@ -690,11 +708,13 @@ async function runIngest( url, options = {} ) {
 
     statusEl.textContent = `Ingest complete. Markdown saved locally and memory added to "${payload.project || UNASSIGNED_PROJECT}".`;
 
-    if ( !projects.includes( payload.project ) ) {
-      projects.push( payload.project );
-      saveProjects();
-      renderProjects();
+    try {
+      await refreshProjectsFromFs();
+    } catch {
+      // Listing projects failed — ingest still succeeded
     }
+
+    renderProjects();
 
     if ( options.inlineOnly ) {
       memoryIngestUrlInput.value = '';
@@ -1007,7 +1027,8 @@ async function checkHealth() {
 
 async function initAgent() {
   try {
-    const result = await api.agentInit();
+    const project = activeProject || UNASSIGNED_PROJECT;
+    const result = await api.agentInit( project );
     if ( result.ok ) {
       setAgentStatus( 'Ready', 'bg-emerald-400' );
     } else {
@@ -1051,17 +1072,50 @@ document.addEventListener( 'keydown', ( e ) => {
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
-if ( projects.length > 0 ) {
-  activeProject = projects[0];
-}
-
 setMemoryCreateStatus( 'New notes are saved into the selected project\'s local markdown files.' );
 
-renderProjects();
-loadMemories();
-checkHealth();
-initAgent();
+async function bootstrap() {
+  try {
+    await refreshProjectsFromFs();
+  } catch {
+    projects = normalizeProjects( [] );
+  }
 
-if ( api.onAgentEvent ) {
-  api.onAgentEvent( handleAgentEvent );
+  if ( projects.length > 0 ) {
+    activeProject = projects[0];
+  }
+
+  renderProjects();
+  void loadMemories();
+  checkHealth();
+  await initAgent();
+
+  if ( api.onAgentEvent ) {
+    api.onAgentEvent( handleAgentEvent );
+  }
 }
+
+void bootstrap();
+
+document.addEventListener( 'visibilitychange', () => {
+  if ( document.visibilityState !== 'visible' ) {
+    return;
+  }
+
+  const previousProject = activeProject;
+
+  void refreshProjectsFromFs()
+    .then( () => {
+      if ( activeProject && !projects.includes( activeProject ) ) {
+        activeProject = projects[0] || null;
+      }
+
+      renderProjects();
+      void loadMemories();
+
+      if ( activeProject && activeProject !== previousProject ) {
+        void syncAgentToProject( activeProject );
+      }
+    } )
+    .catch( () => {} );
+} );
