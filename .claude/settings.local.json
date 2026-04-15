@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api:*)",
+      "Skill(outputai:output-services-check)",
+      "Skill(outputai:output-workflow-run)"
+    ]
+  }
+}

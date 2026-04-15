@@ -1,0 +1,15 @@
+import { contextBridge, ipcRenderer } from 'electron';
+
+contextBridge.exposeInMainWorld( 'openPouchDesktop', {
+  getConfig: () => ipcRenderer.invoke( 'output:get-config' ),
+  getHealth: () => ipcRenderer.invoke( 'output:health' ),
+  ingestUrl: ( url: string, project?: string ) => ipcRenderer.invoke( 'output:ingest-url', { url, project } ),
+  renderMarkdown: ( markdown: string ) => ipcRenderer.invoke( 'output:render-markdown', { markdown } ),
+
+  mem0Health: () => ipcRenderer.invoke( 'mem0:health' ),
+  listMemories: ( project: string ) => ipcRenderer.invoke( 'mem0:list-memories', { project } ),
+  searchMemories: ( project: string, query: string ) => ipcRenderer.invoke( 'mem0:search', { project, query } ),
+  addMemory: ( project: string, content: string, metadata?: Record<string, string> ) => ipcRenderer.invoke( 'mem0:add-memory', { project, content, metadata } ),
+  deleteMemory: ( memoryId: string ) => ipcRenderer.invoke( 'mem0:delete-memory', { memoryId } ),
+  deleteProject: ( project: string ) => ipcRenderer.invoke( 'mem0:delete-project', { project } )
+} );

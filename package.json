@@ -1,0 +1,42 @@
+{
+  "name": "open-pouch",
+  "version": "0.0.1",
+  "description": "AI Agents &amp; Workflows built with Output.ai for open-pouch",
+  "type": "module",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "output:worker:install": "npm install",
+    "output:worker:build": "rm -rf dist/* && tsc -p ./ && output-copy-assets",
+    "output:worker:start": "output-worker",
+    "output:worker": "npm run output:worker:install && npm run output:worker:build && npm run output:worker:start",
+    "output:worker:watch": "npx nodemon --watch src --watch package.json --ext ts,js,json,prompt,md --ignore 'dist/**' --ignore '**/*.spec.*' --ignore '**/*.test.*' --exec 'npm run output:worker'",
+    "output:dev": "output dev",
+    "desktop:assets": "tailwindcss -i ./src/electron/styles.css -o ./dist/electron/styles.css --minify && cp ./src/electron/index.html ./dist/electron/index.html",
+    "desktop:build": "npm run output:worker:build && npm run desktop:assets",
+    "desktop:start": "npm run desktop:build && electron ./dist/electron/main.js"
+  },
+  "dependencies": {
+    "@outputai/output": "0.1.12",
+    "marked": "^18.0.0",
+    "sanitize-html": "^2.17.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.2",
+    "@types/node": "24.5.2",
+    "@types/sanitize-html": "^2.16.1",
+    "concurrently": "^9.2.1",
+    "electron": "^41.2.0",
+    "nodemon": "3.1.14",
+    "tailwindcss": "^4.2.2",
+    "typescript": "5.9.3",
+    "wait-on": "^9.0.5"
+  },
+  "engines": {
+    "node": ">=24.3.0"
+  },
+  "output": {
+    "hookFiles": [
+      "node_modules/@outputai/credentials/dist/hooks.js"
+    ]
+  }
+}
