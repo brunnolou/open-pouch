@@ -72,6 +72,22 @@
           </div>
         </div>
 
+        <!-- Inline document viewer (replaces modal) -->
+        <div id="doc-viewer" class="hidden flex-1 flex-col overflow-hidden">
+          <div class="flex shrink-0 items-center justify-between gap-4 border-b border-border px-6 py-3">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs uppercase tracking-[0.2em] text-primary/80">Stored document</p>
+              <h3 id="doc-viewer-title" class="mt-0.5 truncate text-sm font-semibold text-foreground"></h3>
+              <p id="doc-viewer-path" class="truncate text-[11px] text-muted-foreground"></p>
+            </div>
+            <button id="btn-close-doc" type="button" class="shrink-0 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+            </button>
+          </div>
+          <article id="doc-viewer-body" class="markdown-body min-h-0 flex-1 overflow-auto px-6 py-5 text-sm leading-7 text-foreground"></article>
+          <p id="doc-viewer-error" class="hidden shrink-0 px-6 py-3 text-sm text-destructive"></p>
+        </div>
+
         <!-- Tab: Ingest URL -->
         <div id="tab-ingest" class="hidden flex-1 overflow-y-auto">
           <div class="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
@@ -118,6 +134,48 @@
         </div>
 
       </main>
+
+      <!-- ── Chat Panel: Pi Agent ────────────────────────────── -->
+      <aside id="chat-panel" class="flex w-[400px] shrink-0 flex-col border-l border-border bg-background">
+        <!-- Chat header -->
+        <div class="drag-region flex items-center gap-2 border-b border-border px-4 py-3 pt-12">
+          <div class="flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-primary">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12v8H5l-3 3V3z"/></svg>
+          </div>
+          <h2 class="text-sm font-semibold text-foreground">Agent</h2>
+          <div id="agent-status" class="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span id="agent-dot" class="h-1.5 w-1.5 rounded-full bg-muted-foreground"></span>
+            <span id="agent-label">Idle</span>
+          </div>
+        </div>
+
+        <!-- Chat messages -->
+        <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-4">
+          <div id="chat-empty" class="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-muted-foreground/60"><path d="M12 2a7 7 0 0 1 7 7c0 2.4-1.2 4.5-3 5.7V16a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-1.3C6.2 13.5 5 11.4 5 9a7 7 0 0 1 7-7z"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="10" y1="23" x2="14" y2="23"/></svg>
+            <p class="text-xs">Ask the agent to read, edit, or analyse your ingested files.</p>
+            <p class="text-[10px] text-muted-foreground/60">Powered by pi</p>
+          </div>
+        </div>
+
+        <!-- Chat input -->
+        <div class="border-t border-border p-3">
+          <form id="chat-form" class="flex flex-col gap-2">
+            <div class="relative">
+              <textarea
+                id="chat-input"
+                rows="2"
+                class="w-full resize-none rounded-xl border border-border bg-card/60 px-4 py-3 pr-12 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20"
+                placeholder="Ask the agent..."
+              ></textarea>
+              <button type="submit" id="btn-chat-send" class="absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground transition hover:bg-primary/80 disabled:opacity-40" title="Send">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2L2 8.5l5 2L10 14l4-12z"/></svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      </aside>
+
     </div>
 
     <!-- ── Add Memory Modal ─────────────────────────────────── -->
@@ -130,22 +188,6 @@
           <button id="btn-cancel-memory" class="rounded-lg px-4 py-2 text-sm text-muted-foreground transition hover:text-foreground">Cancel</button>
           <button id="btn-save-memory" class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary/80 disabled:opacity-60">Save Memory</button>
         </div>
-      </div>
-    </div>
-
-    <!-- ── Memory source file (full document) ─────────────── -->
-    <div id="modal-memory-source" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div class="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-border bg-card shadow-2xl">
-        <div class="flex shrink-0 items-start justify-between gap-4 border-b border-border px-6 py-4">
-          <div class="min-w-0">
-            <p class="text-xs uppercase tracking-[0.2em] text-primary/80">Stored document</p>
-            <h3 id="memory-source-title" class="mt-1 truncate text-lg font-semibold text-foreground"></h3>
-            <p id="memory-source-path" class="mt-1 truncate text-xs text-muted-foreground"></p>
-          </div>
-          <button id="btn-close-memory-source" type="button" class="shrink-0 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground">Close</button>
-        </div>
-        <article id="memory-source-body" class="markdown-body min-h-0 flex-1 overflow-auto p-6 text-sm leading-7 text-foreground"></article>
-        <p id="memory-source-error" class="hidden shrink-0 px-6 py-3 text-sm text-destructive"></p>
       </div>
     </div>
 

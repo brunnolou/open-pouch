@@ -292,3 +292,31 @@ body {
   background: var(--card);
   color: var(--foreground);
 }
+
+/* ── Chat panel ───────────────────────────────────────────────────────── */
+
+#chat-messages {
+  scroll-behavior: smooth;
+}
+
+.chat-msg-user + .chat-msg-assistant,
+.chat-msg-assistant + .chat-msg-user {
+  margin-top: 0.5rem;
+}
+
+.chat-tool-card + .chat-msg-assistant {
+  margin-top: 0.5rem;
+}
+
+.tool-card-header:hover {
+  background: color-mix(in oklch, var(--card) 40%, transparent);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}

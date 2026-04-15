@@ -5,12 +5,24 @@ import { fileURLToPath } from 'node:url';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import { createMarkdownFileName } from '../workflows/url_ingest/utils.js';
+import {
+  AuthStorage,
+  createAgentSession,
+  ModelRegistry,
+  SessionManager,
+  codingTools,
+  type AgentSession,
+  type AgentSessionEvent
+} from '@mariozechner/pi-coding-agent';
 
 const __filename = fileURLToPath( import.meta.url );
 const __dirname = path.dirname( __filename );
 
 let mainWindow: BrowserWindow | null = null;
 let contentDir = '';
+let agentSession: AgentSession | null = null;
+let agentUnsubscribe: ( () => void ) | null = null;
+
 const OUTPUT_API_URL = process.env.OUTPUT_API_URL ?? 'http://localhost:3001';
 const MEM0_API_URL = process.env.MEM0_API_URL ?? 'http://localhost:8888';
 const UNASSIGNED_PROJECT = 'unassigned';
@@ -326,6 +338,127 @@ ipcMain.handle( 'mem0:delete-project', async ( _event, payload: { project: strin
   return { deleted: true };
 } );
 
+// ── Pi Agent handlers ────────────────────────────────────────────────────────
+
+function sendToRenderer( channel: string, data: unknown ) {
+  if ( mainWindow && !mainWindow.isDestroyed() ) {
+    mainWindow.webContents.send( channel, data );
+  }
+}
+
+function serializeEvent( event: AgentSessionEvent ): Record<string, unknown> {
+  const base: Record<string, unknown> = { type: event.type };
+
+  switch ( event.type ) {
+    case 'message_update': {
+      const delta = event.assistantMessageEvent;
+      base.eventType = delta.type;
+      if ( 'delta' in delta ) base.delta = delta.delta;
+      if ( 'content' in delta ) base.content = delta.content;
+      if ( 'thinking' in delta ) base.thinking = delta.thinking;
+      if ( 'toolCall' in delta ) base.toolCall = delta.toolCall;
+      break;
+    }
+    case 'tool_execution_start':
+      base.toolCallId = event.toolCallId;
+      base.toolName = event.toolName;
+      base.args = event.args;
+      break;
+    case 'tool_execution_update':
+      base.toolCallId = event.toolCallId;
+      base.toolName = event.toolName;
+      if ( event.partialResult ) {
+        const text = event.partialResult.content
+          ?.filter( ( c: { type: string } ) => c.type === 'text' )
+          .map( ( c: { text: string } ) => c.text )
+          .join( '' );
+        base.partialText = text;
+      }
+      break;
+    case 'tool_execution_end':
+      base.toolCallId = event.toolCallId;
+      base.toolName = event.toolName;
+      base.isError = event.isError;
+      if ( event.result ) {
+        const text = event.result.content
+          ?.filter( ( c: { type: string } ) => c.type === 'text' )
+          .map( ( c: { text: string } ) => c.text )
+          .join( '' );
+        base.resultText = text;
+      }
+      break;
+    case 'agent_start':
+    case 'agent_end':
+    case 'turn_start':
+    case 'turn_end':
+    case 'message_start':
+    case 'message_end':
+    case 'compaction_start':
+    case 'compaction_end':
+      break;
+  }
+
+  return base;
+}
+
+async function initAgentSession() {
+  if ( agentSession ) return;
+
+  const authStorage = AuthStorage.create();
+  const modelRegistry = ModelRegistry.create( authStorage );
+
+  const { session } = await createAgentSession( {
+    cwd: contentDir,
+    tools: codingTools,
+    sessionManager: SessionManager.inMemory(),
+    authStorage,
+    modelRegistry
+  } );
+
+  agentSession = session;
+
+  agentUnsubscribe = session.subscribe( ( event: AgentSessionEvent ) => {
+    sendToRenderer( 'agent:event', serializeEvent( event ) );
+  } );
+}
+
+ipcMain.handle( 'agent:init', async () => {
+  try {
+    await initAgentSession();
+    return { ok: true };
+  } catch ( error ) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Failed to initialise agent.'
+    };
+  }
+} );
+
+ipcMain.handle( 'agent:prompt', async ( _event, payload: { message: string } ) => {
+  if ( !agentSession ) {
+    await initAgentSession();
+  }
+
+  try {
+    await agentSession!.prompt( payload.message );
+    return { ok: true };
+  } catch ( error ) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Agent prompt failed.'
+    };
+  }
+} );
+
+ipcMain.handle( 'agent:abort', async () => {
+  if ( agentSession ) {
+    await agentSession.abort();
+  }
+  return { ok: true };
+} );
+
+ipcMain.handle( 'agent:get-content-dir', () => contentDir );
+
 // ── App lifecycle ───────────────────────────────────────────────────────────
 
 app.whenReady().then( async () => {
@@ -342,4 +475,9 @@ app.on( 'window-all-closed', async () => {
   if ( process.platform !== 'darwin' ) {
     app.quit();
   }
+} );
+
+app.on( 'before-quit', () => {
+  if ( agentUnsubscribe ) agentUnsubscribe();
+  if ( agentSession ) agentSession.dispose();
 } );

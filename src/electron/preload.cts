@@ -12,5 +12,15 @@ contextBridge.exposeInMainWorld( 'openPouchDesktop', {
   searchMemories: ( project: string, query: string ) => ipcRenderer.invoke( 'mem0:search', { project, query } ),
   addMemory: ( project: string, content: string, metadata?: Record<string, string> ) => ipcRenderer.invoke( 'mem0:add-memory', { project, content, metadata } ),
   deleteMemory: ( memoryId: string ) => ipcRenderer.invoke( 'mem0:delete-memory', { memoryId } ),
-  deleteProject: ( project: string ) => ipcRenderer.invoke( 'mem0:delete-project', { project } )
+  deleteProject: ( project: string ) => ipcRenderer.invoke( 'mem0:delete-project', { project } ),
+
+  agentInit: () => ipcRenderer.invoke( 'agent:init' ),
+  agentPrompt: ( message: string ) => ipcRenderer.invoke( 'agent:prompt', { message } ),
+  agentAbort: () => ipcRenderer.invoke( 'agent:abort' ),
+  agentGetContentDir: () => ipcRenderer.invoke( 'agent:get-content-dir' ),
+  onAgentEvent: ( callback: ( event: unknown ) => void ) => {
+    const handler = ( _ipcEvent: Electron.IpcRendererEvent, data: unknown ) => callback( data );
+    ipcRenderer.on( 'agent:event', handler );
+    return () => ipcRenderer.removeListener( 'agent:event', handler );
+  }
 } );

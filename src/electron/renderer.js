@@ -8,6 +8,8 @@ let projects = normalizeProjects( JSON.parse( localStorage.getItem( STORAGE_KEY 
 let activeProject = null;
 let currentTab = 'memories';
 let searchTimeout = null;
+let agentStreaming = false;
+let chatMessages = [];
 
 function normalizeProjects( list ) {
   const items = Array.isArray( list )
@@ -47,12 +49,13 @@ const memoryContentInput = $( '#memory-content-input' );
 const modalNewProject = $( '#modal-new-project' );
 const projectNameInput = $( '#project-name-input' );
 
-const modalMemorySource = $( '#modal-memory-source' );
-const memorySourceTitle = $( '#memory-source-title' );
-const memorySourcePath = $( '#memory-source-path' );
-const memorySourceBody = $( '#memory-source-body' );
-const memorySourceError = $( '#memory-source-error' );
-const btnCloseMemorySource = $( '#btn-close-memory-source' );
+// Doc viewer (inline, replaces modal)
+const docViewer = $( '#doc-viewer' );
+const docViewerTitle = $( '#doc-viewer-title' );
+const docViewerPath = $( '#doc-viewer-path' );
+const docViewerBody = $( '#doc-viewer-body' );
+const docViewerError = $( '#doc-viewer-error' );
+const btnCloseDoc = $( '#btn-close-doc' );
 
 const ingestForm = $( '#ingest-form' );
 const urlInput = $( '#url-input' );
@@ -65,6 +68,15 @@ const ingestMarkdown = $( '#ingest-markdown' );
 const ingestProjectBadge = $( '#ingest-project-badge' );
 const ingestProjectName = $( '#ingest-project-name' );
 const ingestNoProject = $( '#ingest-no-project' );
+
+// Chat panel
+const chatMessagesEl = $( '#chat-messages' );
+const chatEmptyEl = $( '#chat-empty' );
+const chatForm = $( '#chat-form' );
+const chatInput = $( '#chat-input' );
+const btnChatSend = $( '#btn-chat-send' );
+const agentDot = $( '#agent-dot' );
+const agentLabel = $( '#agent-label' );
 
 function formatIngestMeta( payload ) {
   const parts = [ payload.url ];
@@ -88,12 +100,57 @@ function switchTab( tab ) {
   currentTab = tab;
   tabMemories.classList.toggle( 'hidden', tab !== 'memories' );
   tabIngest.classList.toggle( 'hidden', tab !== 'ingest' );
+  docViewer.classList.add( 'hidden' );
+  docViewer.classList.remove( 'flex' );
   btnTabMemories.classList.toggle( 'tab-active', tab === 'memories' );
   btnTabIngest.classList.toggle( 'tab-active', tab === 'ingest' );
 }
 
 btnTabMemories.addEventListener( 'click', () => switchTab( 'memories' ) );
 btnTabIngest.addEventListener( 'click', () => switchTab( 'ingest' ) );
+
+// ── Inline document viewer ──────────────────────────────────────────────────
+
+function closeDocViewer() {
+  docViewer.classList.add( 'hidden' );
+  docViewer.classList.remove( 'flex' );
+  docViewerError.classList.add( 'hidden' );
+  docViewerBody.innerHTML = '';
+  tabMemories.classList.remove( 'hidden' );
+}
+
+function openDocViewer() {
+  tabMemories.classList.add( 'hidden' );
+  tabIngest.classList.add( 'hidden' );
+  docViewer.classList.remove( 'hidden' );
+  docViewer.classList.add( 'flex' );
+}
+
+async function showDocumentFromFile( mem ) {
+  const filePath = mem.metadata?.file_path;
+  if ( !filePath || typeof api.readFile !== 'function' ) return;
+
+  openDocViewer();
+  docViewerTitle.textContent = mem.metadata?.title || mem.memory;
+  docViewerPath.textContent = filePath;
+  docViewerBody.innerHTML = '<p class="text-muted-foreground">Loading…</p>';
+  docViewerError.classList.add( 'hidden' );
+
+  try {
+    const markdown = await api.readFile( filePath );
+    if ( api.renderMarkdown ) {
+      docViewerBody.innerHTML = await api.renderMarkdown( markdown );
+    } else {
+      docViewerBody.textContent = markdown;
+    }
+  } catch ( err ) {
+    docViewerError.textContent = err instanceof Error ? err.message : String( err );
+    docViewerError.classList.remove( 'hidden' );
+    docViewerBody.innerHTML = '';
+  }
+}
+
+btnCloseDoc.addEventListener( 'click', closeDocViewer );
 
 // ── Project rendering ───────────────────────────────────────────────────────
 
@@ -155,45 +212,6 @@ function formatDate( dateStr ) {
   return d.toLocaleDateString( 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } );
 }
 
-function closeMemorySourceModal() {
-  modalMemorySource.classList.add( 'hidden' );
-  modalMemorySource.classList.remove( 'flex' );
-  memorySourceError.classList.add( 'hidden' );
-  memorySourceError.textContent = '';
-  memorySourceBody.innerHTML = '';
-}
-
-function openMemorySourceModal() {
-  modalMemorySource.classList.remove( 'hidden' );
-  modalMemorySource.classList.add( 'flex' );
-}
-
-async function showMemorySourceFromFile( mem ) {
-  const filePath = mem.metadata?.file_path;
-  if ( !filePath || typeof api.readFile !== 'function' ) return;
-
-  openMemorySourceModal();
-  memorySourceTitle.textContent = mem.metadata?.title || mem.memory;
-  memorySourcePath.textContent = filePath;
-  memorySourceBody.innerHTML = '<p class="text-muted-foreground">Loading…</p>';
-  memorySourceError.classList.add( 'hidden' );
-
-  try {
-    const markdown = await api.readFile( filePath );
-    if ( api.renderMarkdown ) {
-      memorySourceBody.innerHTML = await api.renderMarkdown( markdown );
-    } else {
-      memorySourceBody.textContent = markdown;
-    }
-  } catch ( err ) {
-    memorySourceError.textContent = err instanceof Error ? err.message : String( err );
-    memorySourceError.classList.remove( 'hidden' );
-    memorySourceBody.innerHTML = '';
-  }
-}
-
-btnCloseMemorySource.addEventListener( 'click', closeMemorySourceModal );
-
 function renderMemories( memories, relations ) {
   const cards = memoryListEl.querySelectorAll( '.memory-card' );
   cards.forEach( el => el.remove() );
@@ -210,7 +228,7 @@ function renderMemories( memories, relations ) {
       const card = document.createElement( 'div' );
       card.className = `memory-card group flex items-start gap-3 rounded-xl border border-border/50 bg-card/30 px-4 py-3 transition hover:border-border hover:bg-card/60${hasStoredFile ? ' cursor-pointer' : ''}`;
       if ( hasStoredFile ) {
-        card.title = 'Click to open full document from disk';
+        card.title = 'Click to open full document';
       }
       card.innerHTML = `
         <div class="memory-card-main flex-1 min-w-0">
@@ -229,7 +247,7 @@ function renderMemories( memories, relations ) {
 
       if ( hasStoredFile ) {
         card.addEventListener( 'click', () => {
-          void showMemorySourceFromFile( mem );
+          void showDocumentFromFile( mem );
         } );
       }
 
@@ -457,6 +475,201 @@ ingestForm.addEventListener( 'submit', async ( e ) => {
   }
 } );
 
+// ── Chat: Pi Agent ──────────────────────────────────────────────────────────
+
+function escapeHtml( str ) {
+  const div = document.createElement( 'div' );
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function setAgentStatus( status, color ) {
+  agentDot.className = `h-1.5 w-1.5 rounded-full ${color}`;
+  agentLabel.textContent = status;
+}
+
+function addChatMessage( role, content ) {
+  chatEmptyEl.classList.add( 'hidden' );
+
+  const id = `msg-${Date.now()}-${Math.random().toString( 36 ).slice( 2, 6 )}`;
+
+  const wrapper = document.createElement( 'div' );
+  wrapper.id = id;
+  wrapper.className = `chat-message ${role === 'user' ? 'chat-msg-user' : 'chat-msg-assistant'} mb-3`;
+
+  if ( role === 'user' ) {
+    wrapper.innerHTML = `
+      <div class="ml-8 rounded-xl bg-primary/10 px-4 py-2.5">
+        <p class="text-sm text-foreground whitespace-pre-wrap">${escapeHtml( content )}</p>
+      </div>
+    `;
+  } else {
+    wrapper.innerHTML = `
+      <div class="mr-8 rounded-xl border border-border/50 bg-card/40 px-4 py-2.5">
+        <p class="chat-text text-sm text-foreground leading-relaxed whitespace-pre-wrap">${content || ''}</p>
+      </div>
+    `;
+  }
+
+  chatMessagesEl.appendChild( wrapper );
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+
+  chatMessages.push( { id, role, content } );
+  return id;
+}
+
+function appendToLastAssistant( text ) {
+  const lastMsg = chatMessagesEl.querySelector( '.chat-msg-assistant:last-of-type .chat-text' );
+  if ( lastMsg ) {
+    lastMsg.textContent += text;
+    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  }
+}
+
+function addToolCard( toolName, args, toolCallId ) {
+  chatEmptyEl.classList.add( 'hidden' );
+
+  const card = document.createElement( 'div' );
+  card.id = `tool-${toolCallId}`;
+  card.className = 'chat-tool-card mb-2 rounded-lg border border-border/50 bg-card/20 text-xs overflow-hidden';
+
+  let argsPreview = '';
+  if ( args ) {
+    if ( toolName === 'bash' && args.command ) {
+      argsPreview = args.command;
+    } else if ( toolName === 'read' && args.path ) {
+      argsPreview = args.path;
+    } else if ( toolName === 'edit' && args.path ) {
+      argsPreview = args.path;
+    } else if ( toolName === 'write' && args.path ) {
+      argsPreview = args.path;
+    } else {
+      argsPreview = JSON.stringify( args ).slice( 0, 120 );
+    }
+  }
+
+  card.innerHTML = `
+    <div class="tool-card-header flex items-center gap-2 px-3 py-2 cursor-pointer select-none" title="Click to expand">
+      <span class="tool-icon flex h-5 w-5 items-center justify-center rounded bg-primary/10 text-[10px] font-bold text-primary">${toolName.charAt( 0 ).toUpperCase()}</span>
+      <span class="font-medium text-muted-foreground">${escapeHtml( toolName )}</span>
+      <span class="flex-1 truncate text-muted-foreground/60">${escapeHtml( argsPreview )}</span>
+      <span class="tool-status text-[10px] text-amber-400">running</span>
+    </div>
+    <div class="tool-card-body hidden border-t border-border/30 bg-background/50">
+      <pre class="tool-output max-h-48 overflow-auto px-3 py-2 text-[11px] leading-relaxed text-muted-foreground font-mono whitespace-pre-wrap"></pre>
+    </div>
+  `;
+
+  card.querySelector( '.tool-card-header' ).addEventListener( 'click', () => {
+    const body = card.querySelector( '.tool-card-body' );
+    body.classList.toggle( 'hidden' );
+  } );
+
+  chatMessagesEl.appendChild( card );
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function updateToolCard( toolCallId, partialText ) {
+  const card = chatMessagesEl.querySelector( `#tool-${toolCallId}` );
+  if ( !card ) return;
+  const output = card.querySelector( '.tool-output' );
+  if ( output && partialText ) {
+    output.textContent = partialText;
+  }
+}
+
+function finalizeToolCard( toolCallId, resultText, isError ) {
+  const card = chatMessagesEl.querySelector( `#tool-${toolCallId}` );
+  if ( !card ) return;
+
+  const status = card.querySelector( '.tool-status' );
+  if ( status ) {
+    status.textContent = isError ? 'error' : 'done';
+    status.className = `tool-status text-[10px] ${isError ? 'text-destructive' : 'text-emerald-400'}`;
+  }
+
+  const output = card.querySelector( '.tool-output' );
+  if ( output && resultText ) {
+    output.textContent = resultText.length > 2000 ? resultText.slice( 0, 2000 ) + '\n…truncated' : resultText;
+  }
+}
+
+let currentAssistantMsgId = null;
+
+function handleAgentEvent( event ) {
+  switch ( event.type ) {
+    case 'agent_start':
+      agentStreaming = true;
+      setAgentStatus( 'Thinking…', 'bg-amber-400 animate-pulse' );
+      btnChatSend.disabled = true;
+      break;
+
+    case 'message_update':
+      if ( event.eventType === 'text_delta' && event.delta ) {
+        if ( !currentAssistantMsgId ) {
+          currentAssistantMsgId = addChatMessage( 'assistant', '' );
+        }
+        appendToLastAssistant( event.delta );
+      }
+      if ( event.eventType === 'text_start' ) {
+        setAgentStatus( 'Writing…', 'bg-primary animate-pulse' );
+      }
+      break;
+
+    case 'tool_execution_start':
+      setAgentStatus( `Running ${event.toolName}…`, 'bg-amber-400 animate-pulse' );
+      addToolCard( event.toolName, event.args, event.toolCallId );
+      break;
+
+    case 'tool_execution_update':
+      updateToolCard( event.toolCallId, event.partialText );
+      break;
+
+    case 'tool_execution_end':
+      finalizeToolCard( event.toolCallId, event.resultText, event.isError );
+      break;
+
+    case 'message_end':
+      currentAssistantMsgId = null;
+      break;
+
+    case 'agent_end':
+      agentStreaming = false;
+      currentAssistantMsgId = null;
+      setAgentStatus( 'Idle', 'bg-emerald-400' );
+      btnChatSend.disabled = false;
+      chatInput.focus();
+      break;
+  }
+}
+
+async function sendChatMessage() {
+  const text = chatInput.value.trim();
+  if ( !text || agentStreaming ) return;
+
+  chatInput.value = '';
+  addChatMessage( 'user', text );
+
+  const result = await api.agentPrompt( text );
+  if ( !result.ok ) {
+    addChatMessage( 'assistant', `Error: ${result.error}` );
+    setAgentStatus( 'Error', 'bg-destructive' );
+    btnChatSend.disabled = false;
+  }
+}
+
+chatForm.addEventListener( 'submit', ( e ) => {
+  e.preventDefault();
+  void sendChatMessage();
+} );
+
+chatInput.addEventListener( 'keydown', ( e ) => {
+  if ( e.key === 'Enter' && !e.shiftKey ) {
+    e.preventDefault();
+    void sendChatMessage();
+  }
+} );
+
 // ── Health checks ───────────────────────────────────────────────────────────
 
 async function checkHealth() {
@@ -475,6 +688,19 @@ async function checkHealth() {
   }
 }
 
+async function initAgent() {
+  try {
+    const result = await api.agentInit();
+    if ( result.ok ) {
+      setAgentStatus( 'Ready', 'bg-emerald-400' );
+    } else {
+      setAgentStatus( 'No API key', 'bg-amber-400' );
+    }
+  } catch {
+    setAgentStatus( 'Offline', 'bg-muted-foreground' );
+  }
+}
+
 // ── Keyboard shortcuts ──────────────────────────────────────────────────────
 
 document.addEventListener( 'keydown', ( e ) => {
@@ -483,7 +709,12 @@ document.addEventListener( 'keydown', ( e ) => {
     modalAddMemory.classList.remove( 'flex' );
     modalNewProject.classList.add( 'hidden' );
     modalNewProject.classList.remove( 'flex' );
-    closeMemorySourceModal();
+    if ( docViewer.classList.contains( 'flex' ) ) {
+      closeDocViewer();
+    }
+    if ( agentStreaming ) {
+      void api.agentAbort();
+    }
   }
 
   if ( ( e.metaKey || e.ctrlKey ) && e.key === 'k' ) {
@@ -496,6 +727,11 @@ document.addEventListener( 'keydown', ( e ) => {
     e.preventDefault();
     $( '#btn-new-project' ).click();
   }
+
+  if ( ( e.metaKey || e.ctrlKey ) && e.key === 'l' ) {
+    e.preventDefault();
+    chatInput.focus();
+  }
 } );
 
 // ── Init ────────────────────────────────────────────────────────────────────
@@ -507,3 +743,8 @@ if ( projects.length > 0 ) {
 renderProjects();
 loadMemories();
 checkHealth();
+initAgent();
+
+if ( api.onAgentEvent ) {
+  api.onAgentEvent( handleAgentEvent );
+}
